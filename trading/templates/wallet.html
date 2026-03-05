@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}TradingWeb — Wallet{% endblock %}
+
+{% block content %}
+<div class="exchange page-single">
+
+    <!-- ── Top Nav ── -->
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="topbar-logo">
+                <svg viewBox="0 0 32 32" fill="none" width="26" height="26">
+                    <rect width="32" height="32" rx="8" fill="url(#g2)"/>
+                    <path d="M9 16L14 21L23 11" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs><linearGradient id="g2" x1="0" y1="0" x2="32" y2="32">
+                        <stop stop-color="#F0B90B"/><stop offset="1" stop-color="#0B1426"/>
+                    </linearGradient></defs>
+                </svg>
+                <span class="topbar-brand">TradingWeb</span>
+            </div>
+            <nav class="topbar-nav">
+                <a href="/dashboard/" class="tn-item">Trade</a>
+                <a href="/transactions/" class="tn-item">Transactions</a>
+                <a href="/wallet/" class="tn-item active">Wallet</a>
+                <a href="/sniper/" class="tn-item">Sniper</a>
+            </nav>
+        </div>
+        <div class="topbar-right">
+            <div class="wallet-badge" id="wallet-badge">
+                <div class="wallet-dot"></div>
+                <span id="wallet-short-addr">0x…</span>
+            </div>
+            <button id="btn-disconnect" class="btn btn-sm btn-danger">Disconnect</button>
+        </div>
+    </header>
+
+    <!-- ── Page Content ── -->
+    <div class="page-body">
+
+        <!-- Top row: Account + Network side by side -->
+        <div class="page-row">
+            <div class="page-card">
+                <h2 class="page-title">Account</h2>
+                <div class="wi-row">
+                    <span class="wi-label">Address</span>
+                    <span class="wi-value mono wi-copy" id="info-address" title="Click to copy">—</span>
+                </div>
+                <div class="wi-row">
+                    <span class="wi-label">Provider</span>
+                    <span class="wi-value" id="info-provider">—</span>
+                </div>
+                <div class="wi-row">
+                    <span class="wi-label">Status</span>
+                    <span class="wi-value" id="info-status">—</span>
+                </div>
+                <div class="wi-row">
+                    <span class="wi-label">Connected</span>
+                    <span class="wi-value" id="info-connected-at">—</span>
+                </div>
+            </div>
+
+            <div class="page-card">
+                <h2 class="page-title">Network</h2>
+                <div class="wi-row">
+                    <span class="wi-label">Network</span>
+                    <span class="wi-value" id="info-chain">—</span>
+                </div>
+                <div class="wi-row">
+                    <span class="wi-label">Chain ID</span>
+                    <span class="wi-value mono" id="info-chain-id">—</span>
+                </div>
+                <div class="wi-row">
+                    <span class="wi-label">Block #</span>
+                    <span class="wi-value mono" id="info-block">—</span>
+                </div>
+                <div class="wi-row">
+                    <span class="wi-label">Gas Price</span>
+                    <span class="wi-value mono" id="info-gas">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Balance card -->
+        <div class="page-card">
+            <div class="page-title-row">
+                <h2 class="page-title">Balances</h2>
+                <button id="btn-refresh-wallet" class="btn btn-xs btn-ghost" title="Refresh">&#x21bb; Refresh</button>
+            </div>
+            <div class="balance-hero">
+                <div class="bh-native">
+                    <span class="bh-amount mono" id="info-native-bal">—</span>
+                    <span class="bh-usd mono" id="info-native-usd">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══ Buy / Deposit Crypto ══ -->
+        <div class="page-row">
+
+            <!-- Buy with card -->
+            <div class="page-card buy-card">
+                <h2 class="page-title">💳 Buy Crypto</h2>
+                <p class="buy-desc">Buy <strong id="buy-token-name">BNB</strong> with credit/debit card or bank transfer and receive it directly in your wallet.</p>
+
+                <div class="buy-amount-row">
+                    <label class="buy-label">Amount (USD)</label>
+                    <div class="buy-input-wrap">
+                        <span class="buy-currency">$</span>
+                        <input type="number" id="buy-usd-amount" class="buy-input" value="15" min="5" step="1" placeholder="15">
+                    </div>
+                    <div class="buy-quick-btns">
+                        <button class="buy-quick" data-amt="10">$10</button>
+                        <button class="buy-quick" data-amt="20">$20</button>
+                        <button class="buy-quick" data-amt="50">$50</button>
+                        <button class="buy-quick" data-amt="100">$100</button>
+                    </div>
+                </div>
+
+                <div class="buy-estimate" id="buy-estimate">
+                    ≈ <span id="buy-est-amount">0.023</span> <span id="buy-est-symbol">BNB</span>
+                </div>
+
+                <div class="buy-providers">
+                    <a class="buy-provider-btn binance" id="btn-binance" href="javascript:void(0)" target="_blank" rel="noopener">
+                        <span class="bp-name">Binance</span>
+                        <span class="bp-sub">Card / P2P / Bank</span>
+                    </a>
+                    <a class="buy-provider-btn changelly" id="btn-changelly" href="javascript:void(0)" target="_blank" rel="noopener">
+                        <span class="bp-name">Changelly</span>
+                        <span class="bp-sub">Visa / Mastercard</span>
+                    </a>
+                    <a class="buy-provider-btn changenow" id="btn-changenow" href="javascript:void(0)" target="_blank" rel="noopener">
+                        <span class="bp-name">ChangeNOW</span>
+                        <span class="bp-sub">Swap from any crypto</span>
+                    </a>
+                </div>
+                <p class="buy-note">These are third-party services. Fees vary by provider.</p>
+            </div>
+
+            <!-- Deposit from another wallet -->
+            <div class="page-card deposit-card">
+                <h2 class="page-title">📥 Deposit</h2>
+                <p class="buy-desc">Send <strong id="deposit-token-name">BNB</strong> from Binance, another exchange, or wallet to this address on the <strong id="deposit-network-name">BNB Smart Chain (BEP-20)</strong> network.</p>
+
+                <div class="deposit-qr-wrap">
+                    <img id="deposit-qr" class="deposit-qr" alt="QR Code"
+                         src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=placeholder">
+                </div>
+
+                <div class="deposit-addr-wrap">
+                    <input type="text" id="deposit-address" class="deposit-addr-input mono" readonly value="0x…">
+                    <button id="btn-copy-deposit" class="btn btn-xs btn-accent" title="Copy address">Copy</button>
+                </div>
+
+                <div class="deposit-warning">
+                    ⚠️ Only send <strong id="deposit-warn-token">BNB/BEP-20</strong> tokens to this address. Sending tokens on the wrong network may result in permanent loss.
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Token Holdings -->
+        <div class="page-card">
+            <h2 class="page-title">Token Holdings</h2>
+            <div class="token-table-hdr">
+                <span>Token</span>
+                <span>Balance</span>
+                <span>Contract</span>
+            </div>
+            <div id="info-tokens-list" class="token-table-body">
+                <span class="wi-muted">Connect wallet to view tokens</span>
+            </div>
+        </div>
+
+        <!-- Wallet Events -->
+        <div class="page-card">
+            <div class="page-title-row">
+                <h2 class="page-title">Wallet Events</h2>
+                <button id="btn-clear-wallet-feed" class="btn btn-xs btn-ghost">Clear</button>
+            </div>
+            <div id="wallet-feed" class="live-feed pg-feed"></div>
+        </div>
+
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"
+        crossorigin="anonymous"></script>
+<script src="{% static 'js/pageWallet.js' %}"></script>
+{% endblock %}

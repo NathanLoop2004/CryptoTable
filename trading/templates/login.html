@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}TradingWeb — Connect Wallet{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <!-- ─── Background particles ──────────────────────────── -->
+    <div class="particles" id="particles"></div>
+
+    <!-- ─── Card ──────────────────────────────────────────── -->
+    <div class="login-card">
+        <div class="logo">
+            <div class="logo-icon">
+                <svg viewBox="0 0 40 40" fill="none">
+                    <rect width="40" height="40" rx="10" fill="url(#grad)"/>
+                    <path d="M12 20L18 26L28 14" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs><linearGradient id="grad" x1="0" y1="0" x2="40" y2="40">
+                        <stop stop-color="#3375BB"/><stop offset="1" stop-color="#0B1426"/>
+                    </linearGradient></defs>
+                </svg>
+            </div>
+            <h1>TradingWeb</h1>
+        </div>
+
+        <p class="subtitle">Connect your wallet to access real-time<br>Binance market data.</p>
+
+        <!-- Status messages -->
+        <div id="status-msg" class="status-msg hidden"></div>
+
+        <!-- Trust Wallet / WalletConnect button -->
+        <button id="btn-connect" class="btn btn-primary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L3 7V17L12 22L21 17V7L12 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                <path d="M12 6L7 9V15L12 18L17 15V9L12 6Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            </svg>
+            Connect Trust Wallet
+        </button>
+
+        <!-- MetaMask fallback -->
+        <button id="btn-metamask" class="btn btn-secondary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none">
+                <path d="M4 4H20V20H4V4Z" stroke="currentColor" stroke-width="1.5" rx="3"/>
+                <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+            Connect with MetaMask
+        </button>
+
+        <p class="footer-text">
+            Supports Trust Wallet &amp; MetaMask browser extensions
+        </p>
+
+        <!-- Chain selector (hidden initially, shown after connect) -->
+        <div id="chain-selector" class="chain-selector hidden">
+            <label>Network:</label>
+            <select id="chain-select">
+                <option value="1">Ethereum Mainnet</option>
+                <option value="56" selected>BNB Smart Chain</option>
+                <option value="137">Polygon</option>
+                <option value="42161">Arbitrum One</option>
+                <option value="10">Optimism</option>
+                <option value="43114">Avalanche C-Chain</option>
+            </select>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js" 
+        crossorigin="anonymous"></script>
+<script src="{% static 'js/walletConnect.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,464 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}TradingWeb — Dashboard{% endblock %}
+
+{% block content %}
+<div class="exchange">
+
+    <!-- ════════════════════════════════════════════════════════
+         TOP NAV BAR
+         ════════════════════════════════════════════════════════ -->
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="topbar-logo">
+                <svg viewBox="0 0 32 32" fill="none" width="26" height="26">
+                    <rect width="32" height="32" rx="8" fill="url(#g2)"/>
+                    <path d="M9 16L14 21L23 11" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs><linearGradient id="g2" x1="0" y1="0" x2="32" y2="32">
+                        <stop stop-color="#F0B90B"/><stop offset="1" stop-color="#0B1426"/>
+                    </linearGradient></defs>
+                </svg>
+                <span class="topbar-brand">TradingWeb</span>
+            </div>
+            <!-- Tabs -->
+            <nav class="topbar-nav">
+                <a href="/dashboard/" class="tn-item active">Trade</a>
+                <a href="/transactions/" class="tn-item">Transactions</a>
+                <a href="/wallet/" class="tn-item">Wallet</a>
+                <a href="/sniper/" class="tn-item">Sniper</a>
+            </nav>
+        </div>
+        <div class="topbar-right">
+            <div class="chain-badge" id="chain-badge">
+                <span class="chain-dot"></span>
+                <span id="chain-name">BSC</span>
+                <button id="btn-switch-chain" class="btn-chain-switch" title="Switch to expected chain">Switch</button>
+            </div>
+            <div class="ws-indicator">
+                <div class="ws-dot" id="ws-binance-dot"></div>
+                <span id="ws-binance-label">Binance</span>
+            </div>
+            <div class="ws-indicator">
+                <div class="ws-dot" id="ws-wallet-dot"></div>
+                <span id="ws-wallet-label">Wallet</span>
+            </div>
+            <div class="wallet-badge" id="wallet-badge">
+                <div class="wallet-dot"></div>
+                <span id="wallet-short-addr">0x…</span>
+            </div>
+            <button id="btn-disconnect" class="btn btn-sm btn-danger">Disconnect</button>
+        </div>
+    </header>
+
+    <!-- ════════════════════════════════════════════════════════
+         SECTION: TRADE (Market Data) — Binance-style grid
+         ════════════════════════════════════════════════════════ -->
+    <section id="section-market" class="section active">
+
+        <!-- ── Pair info bar ── -->
+        <div class="pair-bar">
+            <div class="pair-bar-left">
+                <div class="pair-selector">
+                    <div class="symbol-search-wrapper">
+                        <input id="stream-symbol" type="text" class="pair-search-input"
+                               placeholder="Search pair…"
+                               autocomplete="off" spellcheck="false">
+                        <div id="symbol-dropdown" class="symbol-dropdown hidden"></div>
+                    </div>
+                </div>
+                <div class="pair-identity" id="pair-identity">
+                    <img id="pair-icon" class="coin-icon" width="28" height="28" src="" alt="" style="display:none">
+                    <div>
+                        <span class="pair-name" id="pair-name">—</span>
+                        <span class="pair-fullname" id="pair-fullname">Select a pair</span>
+                    </div>
+                </div>
+                <div class="pair-price" id="pair-bar-price">—</div>
+                <div class="pair-stats">
+                    <div class="pstat">
+                        <span class="pstat-label">24h Change</span>
+                        <span class="pstat-value" id="stat-change">—</span>
+                    </div>
+                    <div class="pstat">
+                        <span class="pstat-label">24h High</span>
+                        <span class="pstat-value" id="stat-high">—</span>
+                    </div>
+                    <div class="pstat">
+                        <span class="pstat-label">24h Low</span>
+                        <span class="pstat-value" id="stat-low">—</span>
+                    </div>
+                    <div class="pstat">
+                        <span class="pstat-label">24h Volume</span>
+                        <span class="pstat-value" id="stat-vol">—</span>
+                    </div>
+                </div>
+            </div>
+            <div class="pair-bar-right">
+                <select id="stream-type" class="input-select-sm">
+                    <option value="trade">Trades</option>
+                    <option value="kline_1m">Kline 1m</option>
+                    <option value="kline_5m">Kline 5m</option>
+                    <option value="kline_1h">Kline 1h</option>
+                    <option value="ticker">Ticker 24h</option>
+                    <option value="miniTicker">Mini Ticker</option>
+                    <option value="depth@100ms">Order Book</option>
+                </select>
+                <button id="btn-subscribe" class="btn btn-xs btn-accent">Sub</button>
+                <button id="btn-unsubscribe" class="btn btn-xs btn-ghost">Unsub</button>
+            </div>
+        </div>
+
+        <!-- Active stream badges -->
+        <div id="active-streams" class="active-streams"></div>
+
+        <!-- ── Main trading grid ── -->
+        <div class="trade-grid">
+
+            <!-- LEFT: Chart -->
+            <div class="tg-chart">
+                <div class="chart-toolbar">
+                    <div class="chart-toolbar-left">
+                        <span class="ct-label">Time</span>
+                        <button class="chart-tf active" data-interval="1m">1m</button>
+                        <button class="chart-tf" data-interval="5m">5m</button>
+                        <button class="chart-tf" data-interval="15m">15m</button>
+                        <button class="chart-tf" data-interval="1h">1H</button>
+                        <button class="chart-tf" data-interval="4h">4H</button>
+                        <button class="chart-tf" data-interval="1d">1D</button>
+                        <button class="chart-tf" data-interval="1w">1W</button>
+                        <div class="ct-sep"></div>
+                        <button id="btn-chart-candle" class="chart-type-btn active" title="Candlestick">&#9632;</button>
+                        <button id="btn-chart-line" class="chart-type-btn" title="Line">&#9473;</button>
+                    </div>
+                    <div class="chart-toolbar-right">
+                        <span id="chart-ohlc" class="ct-ohlc mono">O — H — L — C —</span>
+                    </div>
+                </div>
+                <!-- Hidden fields for chart JS logic -->
+                <h3 id="chart-title" style="display:none">—</h3>
+                <span id="chart-price" style="display:none"></span>
+                <span id="chart-change" style="display:none"></span>
+                <span id="chart-vol-label" style="display:none"></span>
+                <div id="chart-wrapper" class="chart-area">
+                    <div id="chart-container" class="chart-container"></div>
+                </div>
+            </div>
+
+            <!-- Resize handle: chart ↔ orderbook -->
+            <div class="resizer resizer-col" id="resizer-tg1"></div>
+
+            <!-- CENTER-RIGHT: Order Book -->
+            <div class="tg-orderbook">
+                <div class="panel-header">
+                    <span class="ph-title">Order Book</span>
+                </div>
+                <div class="ob-header">
+                    <span>Price</span>
+                    <span>Amount</span>
+                    <span>Total</span>
+                </div>
+                <div class="ob-asks" id="ob-asks">
+                    <!-- Filled by JS -->
+                </div>
+                <div class="ob-spread" id="ob-spread">
+                    <span class="ob-spread-price" id="ob-spread-price">—</span>
+                </div>
+                <div class="ob-bids" id="ob-bids">
+                    <!-- Filled by JS -->
+                </div>
+            </div>
+
+            <!-- Resize handle: orderbook ↔ trade -->
+            <div class="resizer resizer-col" id="resizer-tg2"></div>
+
+            <!-- FAR RIGHT: Buy / Sell -->
+            <div class="tg-trade">
+                <div class="panel-header">
+                    <span class="ph-title">Spot</span>
+                </div>
+                <div class="trade-side-tabs">
+                    <button class="tst-btn tst-buy active" id="btn-side-buy">Buy</button>
+                    <button class="tst-btn tst-sell" id="btn-side-sell">Sell</button>
+                </div>
+                <div class="trade-form">
+                    <div class="tf-group">
+                        <label>Price <button class="tf-link-btn" id="btn-sync-price" title="Sync with market">&#x21bb; Market</button></label>
+                        <div class="tf-input-row">
+                            <input type="number" id="trade-price" class="tf-input" placeholder="Market" step="any">
+                            <span class="tf-suffix" id="trade-quote-label">USDT</span>
+                        </div>
+                        <div class="tf-usd-hint" id="price-usd-hint"></div>
+                    </div>
+                    <div class="tf-group">
+                        <label>Amount</label>
+                        <div class="tf-input-row">
+                            <input type="number" id="trade-amount" class="tf-input" placeholder="0.00" step="any">
+                            <span class="tf-suffix" id="trade-base-label">BTC</span>
+                        </div>
+                        <div class="tf-usd-hint" id="amount-usd-hint"></div>
+                    </div>
+                    <div class="tf-pct-row">
+                        <button class="tf-pct" data-pct="25">25%</button>
+                        <button class="tf-pct" data-pct="50">50%</button>
+                        <button class="tf-pct" data-pct="75">75%</button>
+                        <button class="tf-pct" data-pct="100">100%</button>
+                    </div>
+                    <div class="tf-group">
+                        <label>Total</label>
+                        <div class="tf-input-row">
+                            <input type="number" id="trade-total" class="tf-input" placeholder="0.00" step="any" readonly>
+                            <span class="tf-suffix">USDT</span>
+                        </div>
+                        <div class="tf-usd-hint" id="total-usd-hint"></div>
+                    </div>
+                    <!-- Cost in native tokens (swap + gas) -->
+                    <div class="tf-native-cost hidden" id="native-cost-row">
+                        <span class="tf-bal-label">Cost (swap + gas)</span>
+                        <span class="tf-bal-value mono" id="native-cost-value">—</span>
+                    </div>
+                    <!-- Slippage tolerance -->
+                    <div class="tf-slippage-row">
+                        <span class="tf-bal-label">Slippage</span>
+                        <div class="tf-slip-btns">
+                            <button class="tf-slip" data-slip="0.5" >0.5%</button>
+                            <button class="tf-slip active" data-slip="1">1%</button>
+                            <button class="tf-slip" data-slip="3">3%</button>
+                            <input  type="number" id="trade-slippage-custom" class="tf-slip-input" placeholder="%" step="0.1" min="0.1" max="50">
+                        </div>
+                    </div>
+                    <!-- Estimated output -->
+                    <div class="tf-estimate-row hidden" id="trade-estimate-row">
+                        <span class="tf-est-label">Est. Output</span>
+                        <span class="tf-est-value mono" id="trade-estimate">—</span>
+                    </div>
+                    <div class="tf-balance-row">
+                        <span class="tf-bal-label">Avbl</span>
+                        <span class="tf-bal-value mono" id="native-balance">—</span>
+                    </div>
+                    <!-- Trade status -->
+                    <div class="tf-trade-status hidden" id="trade-status"></div>
+                    <button id="btn-trade-submit" class="btn btn-trade btn-buy-green">Buy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Resize handle: top grid ↔ bottom grid (vertical) -->
+        <div class="resizer resizer-row" id="resizer-v"></div>
+
+        <!-- ── Bottom panels ── -->
+        <div class="bottom-grid">
+            <!-- Left: Open Orders / Trade History / Live Feed -->
+            <div class="bg-left">
+                <div class="bottom-tabs">
+                    <button class="btab active" data-btab="market-trades">Market Trades</button>
+                    <button class="btab" data-btab="live-feed">Live Feed</button>
+                    <button class="btab" data-btab="price-cards">Watchlist</button>
+                </div>
+                <div id="btab-market-trades" class="btab-panel active">
+                    <div class="mt-header">
+                        <span>Price</span>
+                        <span>Amount</span>
+                        <span>Time</span>
+                    </div>
+                    <div id="market-trades" class="mt-body"></div>
+                </div>
+                <div id="btab-live-feed" class="btab-panel">
+                    <div class="feed-bar">
+                        <button id="btn-clear-feed" class="btn btn-xs btn-ghost">Clear</button>
+                    </div>
+                    <div id="live-feed" class="live-feed"></div>
+                </div>
+                <div id="btab-price-cards" class="btab-panel">
+                    <div id="price-cards" class="price-cards-list"></div>
+                </div>
+            </div>
+
+            <!-- Resize handle: bg-left ↔ bg-right -->
+            <div class="resizer resizer-col" id="resizer-bg1"></div>
+
+            <!-- Right: Transactions / Wallet -->
+            <div class="bg-right" id="bg-right-panels">
+                <div class="bottom-tabs">
+                    <button class="btab2 active" data-btab2="tx-panel">Transactions</button>
+                    <button class="btab2" data-btab2="wallet-panel">Wallet Info</button>
+                </div>
+
+                <!-- Transactions sub-panel -->
+                <div id="btab2-tx-panel" class="btab2-panel active">
+                    <div class="tx-tabs">
+                        <button class="tx-tab active" data-tab="send-native">Send</button>
+                        <button class="tx-tab" data-tab="send-token">Token</button>
+                        <button class="tx-tab" data-tab="swap">Swap</button>
+                    </div>
+
+                    <div id="tab-send-native" class="tx-panel active">
+                        <div class="tf-group">
+                            <label>Recipient</label>
+                            <input type="text" id="sn-to" class="tf-input mono" placeholder="0x…" />
+                        </div>
+                        <div class="tf-group">
+                            <label>Amount</label>
+                            <div class="tf-input-row">
+                                <input type="number" id="sn-amount" class="tf-input" step="any" min="0" placeholder="0.0" />
+                                <span id="sn-symbol" class="tf-suffix">ETH</span>
+                            </div>
+                        </div>
+                        <button id="btn-send-native" class="btn btn-sm btn-accent" style="width:100%">Send</button>
+                        <div id="sn-result" class="tx-result hidden"></div>
+                    </div>
+
+                    <div id="tab-send-token" class="tx-panel">
+                        <div class="tf-group">
+                            <label>Token Contract</label>
+                            <input type="text" id="st-token" class="tf-input mono" placeholder="0x…" />
+                        </div>
+                        <div class="tf-info-line" id="st-token-info">Enter contract to load…</div>
+                        <div class="tf-group">
+                            <label>Recipient</label>
+                            <input type="text" id="st-to" class="tf-input mono" placeholder="0x…" />
+                        </div>
+                        <div class="tf-group">
+                            <label>Amount</label>
+                            <input type="number" id="st-amount" class="tf-input" step="any" min="0" placeholder="0.0" />
+                        </div>
+                        <button id="btn-send-token" class="btn btn-sm btn-accent" style="width:100%">Send Token</button>
+                        <div id="st-result" class="tx-result hidden"></div>
+                    </div>
+
+                    <div id="tab-swap" class="tx-panel">
+                        <div class="tf-group">
+                            <label>From (empty = native)</label>
+                            <input type="text" id="sw-from" class="tf-input mono" placeholder="0x…" />
+                        </div>
+                        <div class="tf-group">
+                            <label>To Token</label>
+                            <input type="text" id="sw-to" class="tf-input mono" placeholder="0x…" />
+                        </div>
+                        <div class="tf-group">
+                            <label>Amount</label>
+                            <input type="number" id="sw-amount" class="tf-input" step="any" placeholder="0.0" />
+                        </div>
+                        <div class="tf-group">
+                            <label>Slippage %</label>
+                            <input type="number" id="sw-slippage" class="tf-input" value="0.5" step="0.1" min="0.1" max="50" />
+                        </div>
+                        <div class="tf-info-line" id="sw-estimate">Est. output: —</div>
+                        <button id="btn-swap" class="btn btn-sm btn-accent" style="width:100%">Swap</button>
+                        <div id="sw-result" class="tx-result hidden"></div>
+                    </div>
+
+                    <div class="tx-log-mini">
+                        <div class="tx-log-hdr">
+                            <span>TX Log</span>
+                            <button id="btn-clear-tx-feed" class="btn btn-xs btn-ghost">Clear</button>
+                        </div>
+                        <div id="tx-feed" class="live-feed mini-feed"></div>
+                    </div>
+                </div>
+
+                <!-- Wallet Info sub-panel -->
+                <div id="btab2-wallet-panel" class="btab2-panel">
+                    <div class="wallet-info-compact">
+                        <!-- Identity -->
+                        <div class="wi-section-hdr">Account</div>
+                        <div class="wi-row">
+                            <span class="wi-label">Address</span>
+                            <span class="wi-value mono wi-copy" id="info-address" title="Click to copy">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">Provider</span>
+                            <span class="wi-value" id="info-provider">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">Status</span>
+                            <span class="wi-value" id="info-status">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">Connected</span>
+                            <span class="wi-value" id="info-connected-at">—</span>
+                        </div>
+
+                        <!-- Network -->
+                        <div class="wi-section-hdr">Network</div>
+                        <div class="wi-row">
+                            <span class="wi-label">Network</span>
+                            <span class="wi-value" id="info-chain">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">Chain ID</span>
+                            <span class="wi-value mono" id="info-chain-id">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">Block #</span>
+                            <span class="wi-value mono" id="info-block">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">Gas Price</span>
+                            <span class="wi-value mono" id="info-gas">—</span>
+                        </div>
+
+                        <!-- Balances -->
+                        <div class="wi-section-hdr">Balances</div>
+                        <div class="wi-row">
+                            <span class="wi-label">Native</span>
+                            <span class="wi-value mono" id="info-native-bal">—</span>
+                        </div>
+                        <div class="wi-row">
+                            <span class="wi-label">USD Value</span>
+                            <span class="wi-value mono" id="info-native-usd">—</span>
+                        </div>
+
+                        <!-- Tokens -->
+                        <div class="wi-section-hdr">Tokens <button id="btn-refresh-wallet" class="btn btn-xs btn-ghost" title="Refresh">&#x21bb;</button></div>
+                        <div id="info-tokens-list" class="wi-tokens-list">
+                            <span class="wi-muted">Connect wallet to view</span>
+                        </div>
+                    </div>
+                    <div class="tx-log-mini">
+                        <div class="tx-log-hdr">
+                            <span>Wallet Events</span>
+                            <button id="btn-clear-wallet-feed" class="btn btn-xs btn-ghost">Clear</button>
+                        </div>
+                        <div id="wallet-feed" class="live-feed mini-feed"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </section>
+
+</div>
+
+<!-- ── Trade confirmation modal ── -->
+<div class="trade-modal-overlay hidden" id="trade-modal">
+    <div class="trade-modal">
+        <div class="trade-modal-header">
+            <span id="tm-title">Confirm Trade</span>
+            <button class="trade-modal-close" id="tm-close">&times;</button>
+        </div>
+        <div class="trade-modal-body">
+            <div class="tm-row"><span class="tm-label">Side</span><span class="tm-value" id="tm-side">Buy</span></div>
+            <div class="tm-row"><span class="tm-label">Pair</span><span class="tm-value" id="tm-pair">—</span></div>
+            <div class="tm-row"><span class="tm-label">Amount In</span><span class="tm-value mono" id="tm-amount-in">—</span></div>
+            <div class="tm-row"><span class="tm-label">Est. Output</span><span class="tm-value mono" id="tm-amount-out">—</span></div>
+            <div class="tm-row"><span class="tm-label">USD Value</span><span class="tm-value mono" id="tm-usd-value" style="color:var(--accent)">—</span></div>
+            <div class="tm-row"><span class="tm-label">Slippage</span><span class="tm-value" id="tm-slippage">—</span></div>
+            <div class="tm-row"><span class="tm-label">DEX</span><span class="tm-value" id="tm-dex">—</span></div>
+        </div>
+        <div class="trade-modal-footer">
+            <button class="btn btn-trade-modal btn-cancel" id="tm-cancel">Cancel</button>
+            <button class="btn btn-trade-modal btn-confirm" id="tm-confirm">Confirm</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
+        crossorigin="anonymous"></script>
+<script src="{% static 'js/transactions.js' %}"></script>
+<script src="{% static 'js/dashboard.js' %}"></script>
+{% endblock %}

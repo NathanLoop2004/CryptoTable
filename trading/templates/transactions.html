@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}TradingWeb — Transactions{% endblock %}
+
+{% block content %}
+<div class="exchange page-single">
+
+    <!-- ── Top Nav ── -->
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="topbar-logo">
+                <svg viewBox="0 0 32 32" fill="none" width="26" height="26">
+                    <rect width="32" height="32" rx="8" fill="url(#g2)"/>
+                    <path d="M9 16L14 21L23 11" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs><linearGradient id="g2" x1="0" y1="0" x2="32" y2="32">
+                        <stop stop-color="#F0B90B"/><stop offset="1" stop-color="#0B1426"/>
+                    </linearGradient></defs>
+                </svg>
+                <span class="topbar-brand">TradingWeb</span>
+            </div>
+            <nav class="topbar-nav">
+                <a href="/dashboard/" class="tn-item">Trade</a>
+                <a href="/transactions/" class="tn-item active">Transactions</a>
+                <a href="/wallet/" class="tn-item">Wallet</a>
+                <a href="/sniper/" class="tn-item">Sniper</a>
+            </nav>
+        </div>
+        <div class="topbar-right">
+            <div class="wallet-badge" id="wallet-badge">
+                <div class="wallet-dot"></div>
+                <span id="wallet-short-addr">0x…</span>
+            </div>
+            <button id="btn-disconnect" class="btn btn-sm btn-danger">Disconnect</button>
+        </div>
+    </header>
+
+    <!-- ── Page Content ── -->
+    <div class="page-body">
+        <div class="page-card page-card-wide">
+            <h2 class="page-title">Transactions</h2>
+            <p class="page-subtitle">Send native currency, ERC-20 tokens, or swap on DEX</p>
+
+            <!-- Tabs -->
+            <div class="pg-tabs">
+                <button class="pg-tab active" data-tab="send-native">Send Native</button>
+                <button class="pg-tab" data-tab="send-token">Send Token</button>
+                <button class="pg-tab" data-tab="swap">DEX Swap</button>
+            </div>
+
+            <!-- Balance bar -->
+            <div class="pg-balance-bar">
+                <span class="pg-bal-label">Balance:</span>
+                <span class="pg-bal-value mono" id="native-balance">—</span>
+            </div>
+
+            <!-- Send Native -->
+            <div id="tab-send-native" class="pg-panel active">
+                <div class="pg-form-group">
+                    <label>Recipient Address</label>
+                    <input type="text" id="sn-to" class="pg-input mono" placeholder="0x…" />
+                </div>
+                <div class="pg-form-group">
+                    <label>Amount</label>
+                    <div class="pg-input-row">
+                        <input type="number" id="sn-amount" class="pg-input" step="any" min="0" placeholder="0.0" />
+                        <span class="pg-suffix" id="sn-symbol">ETH</span>
+                    </div>
+                </div>
+                <button id="btn-send-native" class="btn btn-accent btn-full">Send</button>
+                <div id="sn-result" class="tx-result hidden"></div>
+            </div>
+
+            <!-- Send Token -->
+            <div id="tab-send-token" class="pg-panel">
+                <div class="pg-form-group">
+                    <label>Token Contract</label>
+                    <input type="text" id="st-token" class="pg-input mono" placeholder="0x…" />
+                </div>
+                <div class="pg-info-line" id="st-token-info">Enter contract to load…</div>
+                <div class="pg-form-group">
+                    <label>Recipient Address</label>
+                    <input type="text" id="st-to" class="pg-input mono" placeholder="0x…" />
+                </div>
+                <div class="pg-form-group">
+                    <label>Amount</label>
+                    <input type="number" id="st-amount" class="pg-input" step="any" min="0" placeholder="0.0" />
+                </div>
+                <button id="btn-send-token" class="btn btn-accent btn-full">Send Token</button>
+                <div id="st-result" class="tx-result hidden"></div>
+            </div>
+
+            <!-- Swap -->
+            <div id="tab-swap" class="pg-panel">
+                <div class="pg-form-group">
+                    <label>From Token <small class="pg-hint">(empty = native)</small></label>
+                    <input type="text" id="sw-from" class="pg-input mono" placeholder="0x…" />
+                </div>
+                <div class="pg-form-group">
+                    <label>To Token</label>
+                    <input type="text" id="sw-to" class="pg-input mono" placeholder="0x…" />
+                </div>
+                <div class="pg-form-group">
+                    <label>Amount</label>
+                    <input type="number" id="sw-amount" class="pg-input" step="any" placeholder="0.0" />
+                </div>
+                <div class="pg-form-group">
+                    <label>Slippage %</label>
+                    <input type="number" id="sw-slippage" class="pg-input" value="0.5" step="0.1" min="0.1" max="50" />
+                </div>
+                <div class="pg-info-line" id="sw-estimate">Est. output: —</div>
+                <button id="btn-swap" class="btn btn-accent btn-full">Swap</button>
+                <div id="sw-result" class="tx-result hidden"></div>
+            </div>
+
+            <!-- TX Log -->
+            <div class="pg-log">
+                <div class="pg-log-hdr">
+                    <span>Transaction Log</span>
+                    <button id="btn-clear-tx-feed" class="btn btn-xs btn-ghost">Clear</button>
+                </div>
+                <div id="tx-feed" class="live-feed pg-feed"></div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"
+        crossorigin="anonymous"></script>
+<script src="{% static 'js/transactions.js' %}"></script>
+<script src="{% static 'js/pageTransactions.js' %}"></script>
+{% endblock %}

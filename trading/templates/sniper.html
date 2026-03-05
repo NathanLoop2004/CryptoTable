@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}TradingWeb — Sniper Bot{% endblock %}
+
+{% block content %}
+<div class="exchange page-single sniper-page">
+
+    <!-- ── Top Nav ── -->
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="topbar-logo">
+                <svg viewBox="0 0 32 32" fill="none" width="26" height="26">
+                    <rect width="32" height="32" rx="8" fill="url(#g2)"/>
+                    <path d="M9 16L14 21L23 11" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs><linearGradient id="g2" x1="0" y1="0" x2="32" y2="32">
+                        <stop stop-color="#F0B90B"/><stop offset="1" stop-color="#0B1426"/>
+                    </linearGradient></defs>
+                </svg>
+                <span class="topbar-brand">TradingWeb</span>
+            </div>
+            <nav class="topbar-nav">
+                <a href="/dashboard/" class="tn-item">Trade</a>
+                <a href="/transactions/" class="tn-item">Transactions</a>
+                <a href="/wallet/" class="tn-item">Wallet</a>
+                <a href="/sniper/" class="tn-item active">Sniper</a>
+            </nav>
+        </div>
+        <div class="topbar-right">
+            <div class="wallet-badge" id="wallet-badge">
+                <div class="wallet-dot"></div>
+                <span class="wallet-addr" id="wallet-addr">Not connected</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ── Sniper Body ── -->
+    <div class="sniper-body">
+
+        <!-- LEFT: Controls + Settings -->
+        <div class="sniper-sidebar">
+
+            <!-- Bot Control -->
+            <div class="sniper-card">
+                <h3 class="sc-title">🎯 Sniper Bot</h3>
+                <div class="bot-status-bar">
+                    <div class="bot-status-dot" id="bot-dot"></div>
+                    <span class="bot-status-text" id="bot-status-text">Stopped</span>
+                    <span class="bot-chain-label" id="bot-chain-label">BSC</span>
+                </div>
+                <div class="bot-controls">
+                    <select id="chain-select" class="sniper-select">
+                        <option value="56" selected>BSC (PancakeSwap)</option>
+                        <option value="1">Ethereum (Uniswap)</option>
+                    </select>
+                    <button class="btn-sniper btn-start" id="btn-start">▶ Start</button>
+                    <button class="btn-sniper btn-stop" id="btn-stop" disabled>■ Stop</button>
+                </div>
+                <div class="bot-stats">
+                    <div class="bs-item">
+                        <span class="bs-label">Block</span>
+                        <span class="bs-value" id="stat-block">—</span>
+                    </div>
+                    <div class="bs-item">
+                        <span class="bs-label">Pairs Found</span>
+                        <span class="bs-value" id="stat-pairs">0</span>
+                    </div>
+                    <div class="bs-item">
+                        <span class="bs-label">Active Snipes</span>
+                        <span class="bs-value" id="stat-active">0</span>
+                    </div>
+                    <div class="bs-item">
+                        <span class="bs-label">Native Price</span>
+                        <span class="bs-value" id="stat-price">—</span>
+                    </div>
+                </div>
+                <button class="btn-sniper btn-detected" id="btn-open-detected">
+                    🔍 Detectados <span class="detected-badge" id="detected-badge">0</span>
+                </button>
+            </div>
+
+            <!-- Settings -->
+            <div class="sniper-card">
+                <h3 class="sc-title">⚙️ Settings</h3>
+                <div class="setting-row">
+                    <label>Min Liquidity (USD)</label>
+                    <input type="number" id="set-min-liq" class="sniper-input" value="5000" step="1000">
+                </div>
+                <div class="setting-row">
+                    <label>Max Buy Tax (%)</label>
+                    <input type="number" id="set-max-buy-tax" class="sniper-input" value="10" step="1">
+                </div>
+                <div class="setting-row">
+                    <label>Max Sell Tax (%)</label>
+                    <input type="number" id="set-max-sell-tax" class="sniper-input" value="15" step="1">
+                </div>
+                <div class="setting-row">
+                    <label>Buy Amount (native)</label>
+                    <input type="number" id="set-buy-amount" class="sniper-input" value="0.05" step="0.01">
+                </div>
+                <div class="setting-row">
+                    <label>Take Profit (%)</label>
+                    <input type="number" id="set-tp" class="sniper-input" value="40" step="5">
+                </div>
+                <div class="setting-row">
+                    <label>Stop Loss (%)</label>
+                    <input type="number" id="set-sl" class="sniper-input" value="15" step="5">
+                </div>
+                <div class="setting-row">
+                    <label>Slippage (%)</label>
+                    <input type="number" id="set-slippage" class="sniper-input" value="12" step="1">
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>Only Safe Tokens</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-only-safe" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>Auto-Buy</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-auto-buy">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <button class="btn-sniper btn-save-settings" id="btn-save-settings">💾 Save Settings</button>
+            </div>
+        </div>
+
+        <!-- RIGHT: Feed + Detected + Active -->
+        <div class="sniper-main">
+
+            <!-- Pipeline visualization -->
+            <div class="sniper-card pipeline-card">
+                <h3 class="sc-title">🔬 Pipeline</h3>
+                <div class="pipeline">
+                    <div class="pipe-step" id="pipe-mempool">
+                        <div class="pipe-icon">📡</div>
+                        <div class="pipe-label">Mempool</div>
+                        <div class="pipe-count" id="pipe-mempool-count">—</div>
+                    </div>
+                    <div class="pipe-arrow">→</div>
+                    <div class="pipe-step" id="pipe-detect">
+                        <div class="pipe-icon">🔍</div>
+                        <div class="pipe-label">Token Detector</div>
+                        <div class="pipe-count" id="pipe-detect-count">0</div>
+                    </div>
+                    <div class="pipe-arrow">→</div>
+                    <div class="pipe-step" id="pipe-analyze">
+                        <div class="pipe-icon">🛡️</div>
+                        <div class="pipe-label">Analyzer</div>
+                        <div class="pipe-count" id="pipe-analyze-count">0</div>
+                    </div>
+                    <div class="pipe-arrow">→</div>
+                    <div class="pipe-step" id="pipe-liquidity">
+                        <div class="pipe-icon">💧</div>
+                        <div class="pipe-label">Liquidity</div>
+                        <div class="pipe-count" id="pipe-liq-count">0</div>
+                    </div>
+                    <div class="pipe-arrow">→</div>
+                    <div class="pipe-step" id="pipe-snipe">
+                        <div class="pipe-icon">🎯</div>
+                        <div class="pipe-label">Sniper</div>
+                        <div class="pipe-count" id="pipe-snipe-count">0</div>
+                    </div>
+                    <div class="pipe-arrow">→</div>
+                    <div class="pipe-step" id="pipe-profit">
+                        <div class="pipe-icon">💰</div>
+                        <div class="pipe-label">Profit</div>
+                        <div class="pipe-count" id="pipe-profit-count">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detected Tokens Modal Trigger (table is in the modal) -->
+
+    <!-- ════ Detected Tokens Modal ════ -->
+    <div class="modal-overlay" id="detected-modal" style="display:none;">
+        <div class="modal-box modal-detected">
+            <div class="modal-header">
+                <h3 class="modal-title">🔍 Detected Tokens <span class="sc-counter" id="detected-counter">0</span></h3>
+                <button class="modal-close" id="btn-close-detected">✕</button>
+            </div>
+            <div class="detected-filter-tabs">
+                <button class="dft-tab active" data-filter="all">All</button>
+                <button class="dft-tab" data-filter="liquid">💧 Liquid <span id="tab-liquid-count">0</span></button>
+                <button class="dft-tab" data-filter="no-liquid">🚫 No Liquid <span id="tab-noliq-count">0</span></button>
+                <button class="dft-tab" data-filter="safe">🟢 Safe <span id="tab-safe-count">0</span></button>
+                <button class="dft-tab" data-filter="danger">🔴 Danger <span id="tab-danger-count">0</span></button>
+                <button class="dft-tab dft-tab-help" id="btn-toggle-legend">❓ Leyenda</button>
+            </div>
+
+            <!-- Leyenda colapsable -->
+            <div class="legend-panel" id="legend-panel" style="display:none;">
+                <div class="legend-section">
+                    <h4 class="legend-heading legend-heading--danger">🚨 Flags de Peligro (DANGER)</h4>
+                    <div class="legend-grid">
+                        <div class="legend-item"><span class="sec-flag flag-danger">🍯 Honeypot</span><p>No puedes vender el token. Compras pero nunca puedes recuperar tu dinero.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-danger">🖨️ Mintable</span><p>El dueño puede crear tokens nuevos de la nada, causando inflación y bajando el precio.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-danger">🚫 Blacklist</span><p>El dueño puede bloquear wallets específicas para que no puedan vender ni transferir.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-danger">⏸️ Pausable</span><p>El dueño puede pausar todo el trading cuando quiera (ej: pausa ventas justo cuando sube).</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-danger">🔐 Can't sell</span><p>El contrato impide vender todos tus tokens — te quedarás con tokens atrapados.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-danger">⚠️ Ctrl balance</span><p>El dueño puede cambiar el balance de cualquier wallet directamente. Puede quitarte tokens.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-danger">💣 Self-destruct</span><p>El contrato puede autodestruirse, desapareciendo junto con tu inversión.</p></div>
+                    </div>
+                </div>
+
+                <div class="legend-section">
+                    <h4 class="legend-heading legend-heading--warn">⚠️ Flags de Advertencia (WARNING)</h4>
+                    <div class="legend-grid">
+                        <div class="legend-item"><span class="sec-flag flag-warn">🔄 Proxy</span><p>El contrato puede ser actualizado. El dueño podría cambiar toda la lógica después de que compres.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-warn">👤 Hidden owner</span><p>El dueño existe pero está oculto. No puedes ver quién controla el contrato.</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-warn">👑 Has owner</span><p>El contrato tiene un dueño con privilegios especiales (puede cambiar fees, etc.).</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-warn">🔒 Not verified</span><p>El código fuente no está publicado. No se puede auditar qué hace el contrato realmente.</p></div>
+                    </div>
+                </div>
+
+                <div class="legend-section">
+                    <h4 class="legend-heading legend-heading--safe">✅ Flags Positivos (SAFE)</h4>
+                    <div class="legend-grid">
+                        <div class="legend-item"><span class="sec-flag flag-safe">✅ Safe</span><p>No se encontraron flags peligrosos. El contrato parece seguro (nunca 100% garantizado).</p></div>
+                        <div class="legend-item"><span class="sec-flag flag-safe">📝 Verified</span><p>El código fuente está publicado y verificado. Cualquiera puede auditarlo.</p></div>
+                    </div>
+                </div>
+
+                <div class="legend-section">
+                    <h4 class="legend-heading">📊 Columnas de la Tabla</h4>
+                    <div class="legend-grid">
+                        <div class="legend-item"><strong>Risk</strong><p><span class="risk-badge safe">SAFE</span> Sin peligro · <span class="risk-badge warning">WARN</span> Precaución · <span class="risk-badge danger">DANGER</span> Muy peligroso</p></div>
+                        <div class="legend-item"><strong>Buy Tax</strong><p>% que te cobran al comprar. Más de 10% = sospechoso. Más de 30% = scam probable.</p></div>
+                        <div class="legend-item"><strong>Sell Tax</strong><p>% que te cobran al vender. Si es 99-100% = honeypot (no puedes vender).</p></div>
+                        <div class="legend-item"><strong>Liquidity</strong><p>💧 = tiene liquidez suficiente · 🚫 = poca o nada. Sin liquidez no puedes vender.</p></div>
+                        <div class="legend-item"><strong>▸ Expandir</strong><p>Haz click en ▸ para ver todos los flags de seguridad y las razones de riesgo detalladas.</p></div>
+                    </div>
+                </div>
+
+                <div class="legend-section">
+                    <h4 class="legend-heading">🧠 Regla Pro</h4>
+                    <p class="legend-tip">Si un token tiene <strong>3+ flags de warning</strong>, el bot lo marca automáticamente como <span class="risk-badge danger">DANGER</span>. Los bots profesionales <strong>nunca compran</strong> tokens con flags de peligro rojo.</p>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="detected-table-wrap">
+                    <table class="detected-table">
+                        <thead>
+                            <tr>
+                                <th>Token</th>
+                                <th>Risk</th>
+                                <th>Buy Tax</th>
+                                <th>Sell Tax</th>
+                                <th>Liquidity</th>
+                                <th>Block</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detected-tbody">
+                            <tr class="empty-row"><td colspan="7">Waiting for bot to start…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+            <!-- Active Snipes -->
+            <div class="sniper-card">
+                <h3 class="sc-title">💼 Active Positions</h3>
+                <div class="detected-table-wrap">
+                    <table class="detected-table">
+                        <thead>
+                            <tr>
+                                <th>Token</th>
+                                <th>Buy Price</th>
+                                <th>Current</th>
+                                <th>P&L</th>
+                                <th>TP / SL</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="snipes-tbody">
+                            <tr class="empty-row"><td colspan="6">No active positions</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Live Event Feed -->
+            <div class="sniper-card feed-card">
+                <h3 class="sc-title">📡 Live Feed</h3>
+                <div class="sniper-feed" id="sniper-feed">
+                    <div class="feed-line feed-system">Sniper Bot ready. Press Start to begin scanning.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{% static 'js/walletConnect.js' %}"></script>
+<script src="{% static 'js/pageSniper.js' %}"></script>
+{% endblock %}
