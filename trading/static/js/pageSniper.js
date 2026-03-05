@@ -81,6 +81,11 @@
     const setAutoBuy     = $("set-auto-buy");
     const btnSaveSettings = $("btn-save-settings");
 
+    // Performance settings
+    const setMaxConcurrent = $("set-max-concurrent");
+    const setBlockRange    = $("set-block-range");
+    const setPollInterval  = $("set-poll-interval");
+
     // Wallet badge
     const walletBadge    = $("wallet-badge");
     const walletAddr     = $("wallet-addr");
@@ -334,6 +339,9 @@
             if (setSlippage)   setSlippage.value   = state.settings.slippage || 12;
             if (setOnlySafe)   setOnlySafe.checked = state.settings.only_safe !== false;
             if (setAutoBuy)    setAutoBuy.checked  = !!state.settings.auto_buy;
+            if (setMaxConcurrent) setMaxConcurrent.value = state.settings.max_concurrent || 5;
+            if (setBlockRange)    setBlockRange.value    = state.settings.block_range || 5;
+            if (setPollInterval)  setPollInterval.value  = state.settings.poll_interval || 1.5;
         }
 
         // Replay detected pairs into table
@@ -638,6 +646,9 @@
             slippage:          parseFloat(setSlippage.value)  || 12,
             only_safe:         setOnlySafe.checked,
             auto_buy:          setAutoBuy.checked,
+            max_concurrent:    parseInt(setMaxConcurrent.value) || 5,
+            block_range:       parseInt(setBlockRange.value)   || 5,
+            poll_interval:     parseFloat(setPollInterval.value) || 1.5,
         };
         sendWS({ action: "update_settings", settings });
         addFeed("Saving settings…", "system");

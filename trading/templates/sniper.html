@@ -124,6 +124,21 @@
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
+
+                <h4 class="sc-subtitle" style="margin-top:12px;color:#848e9c;font-size:0.75rem;">⚡ Rendimiento</h4>
+                <div class="setting-row">
+                    <label>Pares simultáneos</label>
+                    <input type="number" id="set-max-concurrent" class="sniper-input" value="5" min="1" max="20" step="1">
+                </div>
+                <div class="setting-row">
+                    <label>Bloques por escaneo</label>
+                    <input type="number" id="set-block-range" class="sniper-input" value="5" min="1" max="20" step="1">
+                </div>
+                <div class="setting-row">
+                    <label>Intervalo escaneo (s)</label>
+                    <input type="number" id="set-poll-interval" class="sniper-input" value="1.5" min="0.5" max="10" step="0.5">
+                </div>
+
                 <button class="btn-sniper btn-save-settings" id="btn-save-settings">💾 Save Settings</button>
             </div>
         </div>

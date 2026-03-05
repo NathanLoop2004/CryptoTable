@@ -214,9 +214,10 @@ class ActiveSnipe:
 class ContractAnalyzer:
     """Analyze a token contract for scam indicators using multiple APIs."""
 
-    def __init__(self, w3: Web3, chain_id: int):
+    def __init__(self, w3: Web3, chain_id: int, session: aiohttp.ClientSession | None = None):
         self.w3 = w3
         self.chain_id = chain_id
+        self._session = session   # shared session for connection pooling
 
     async def analyze(self, token_address: str) -> TokenInfo:
         """Full analysis of a token contract."""
@@ -270,12 +271,19 @@ class ContractAnalyzer:
 
         return info
 
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return the shared session or create a temporary one."""
+        if self._session and not self._session.closed:
+            return self._session
+        return aiohttp.ClientSession()
+
     async def _check_honeypot_api(self, info: TokenInfo):
         """Use honeypot.is API to check for scams."""
         try:
             url = f"https://api.honeypot.is/v2/IsHoneypot?address={info.address}&chainID={self.chain_id}"
-
-            async with aiohttp.ClientSession() as session:
+            own_session = self._session is None or self._session.closed
+            session = await self._get_session() if not own_session else aiohttp.ClientSession()
+            try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -292,6 +300,9 @@ class ContractAnalyzer:
                             info.risk_reasons.append(f"💸 Buy tax alto: {info.buy_tax}%")
                         if info.sell_tax > 10:
                             info.risk_reasons.append(f"💸 Sell tax alto: {info.sell_tax}%")
+            finally:
+                if own_session:
+                    await session.close()
         except Exception as e:
             logger.debug(f"Honeypot API failed: {e}")
 
@@ -301,12 +312,16 @@ class ContractAnalyzer:
             chain_id_str = str(self.chain_id)
             addr = info.address.lower()
             url = f"https://api.gopluslabs.com/api/v1/token_security/{chain_id_str}?contract_addresses={addr}"
-
-            async with aiohttp.ClientSession() as session:
+            own_session = self._session is None or self._session.closed
+            session = await self._get_session() if not own_session else aiohttp.ClientSession()
+            try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
                     if resp.status != 200:
                         return
                     data = await resp.json()
+            finally:
+                if own_session:
+                    await session.close()
 
             result = data.get("result", {}).get(addr, {})
             if not result:
@@ -459,6 +474,10 @@ class SniperBot:
             "auto_buy": False,           # auto-execute buys
             "only_safe": True,           # only buy "safe" risk tokens
             "slippage": 12,              # %
+            # ── Concurrency / Performance ──
+            "max_concurrent": 5,         # parallel pair analyses
+            "block_range": 5,            # blocks per scan cycle
+            "poll_interval": 1.5,        # seconds between scans
         }
 
         # State
@@ -471,7 +490,13 @@ class SniperBot:
         self._rpc_list = RPC_FALLBACKS.get(chain_id, [rpc_info["http"]])
         self._rpc_index = 0
         self.w3 = Web3(Web3.HTTPProvider(self._rpc_list[0]))
+
+        # Shared aiohttp session (created/closed in run())
+        self._http_session: aiohttp.ClientSession | None = None
         self.analyzer = ContractAnalyzer(self.w3, chain_id)
+
+        # Concurrency semaphore (limits parallel analyses)
+        self._sem = asyncio.Semaphore(self.settings["max_concurrent"])
 
         # Contracts
         factory_addr = FACTORY_ADDRESSES.get(chain_id)
@@ -530,14 +555,15 @@ class SniperBot:
             pass
 
     # ─── Liquidity check ────────────────────────────────────
-    def _get_pair_liquidity(self, pair_address: str) -> tuple[float, float]:
-        """Get liquidity in native token and USD."""
+    async def _get_pair_liquidity(self, pair_address: str) -> tuple[float, float]:
+        """Get liquidity in native token and USD (async-friendly)."""
+        loop = asyncio.get_event_loop()
         try:
             pair_cs = Web3.to_checksum_address(pair_address)
             pair_contract = self.w3.eth.contract(address=pair_cs, abi=PAIR_ABI)
 
-            reserves = pair_contract.functions.getReserves().call()
-            token0 = pair_contract.functions.token0().call()
+            reserves = await loop.run_in_executor(None, pair_contract.functions.getReserves().call)
+            token0 = await loop.run_in_executor(None, pair_contract.functions.token0().call)
 
             weth_cs = Web3.to_checksum_address(self.weth)
             if token0.lower() == weth_cs.lower():
@@ -552,8 +578,9 @@ class SniperBot:
             return 0, 0
 
     # ─── Token price via router ─────────────────────────────
-    def _get_token_price_usd(self, token_address: str) -> float:
-        """Get token price in USD via DEX router."""
+    async def _get_token_price_usd(self, token_address: str) -> float:
+        """Get token price in USD via DEX router (async-friendly)."""
+        loop = asyncio.get_event_loop()
         try:
             router = self.w3.eth.contract(
                 address=Web3.to_checksum_address(self.router_addr),
@@ -562,11 +589,13 @@ class SniperBot:
             weth_cs = Web3.to_checksum_address(self.weth)
             token_cs = Web3.to_checksum_address(token_address)
 
-            # 1 token → how much WBNB/WETH?
-            amounts = router.functions.getAmountsOut(
-                10**18,  # 1 token (18 dec)
-                [token_cs, weth_cs]
-            ).call()
+            amounts = await loop.run_in_executor(
+                None,
+                router.functions.getAmountsOut(
+                    10**18,
+                    [token_cs, weth_cs]
+                ).call,
+            )
 
             native_per_token = amounts[1] / 1e18
             return native_per_token * self.native_price_usd
@@ -575,7 +604,12 @@ class SniperBot:
 
     # ─── New pair handler ───────────────────────────────────
     async def _handle_new_pair(self, pair_address: str, token0: str, token1: str, block: int):
-        """Process a newly detected pair."""
+        """Process a newly detected pair (runs under semaphore)."""
+        async with self._sem:
+            await self._process_pair(pair_address, token0, token1, block)
+
+    async def _process_pair(self, pair_address: str, token0: str, token1: str, block: int):
+        """Internal: full analysis pipeline for one pair."""
         weth_lower = self.weth.lower()
 
         if token0.lower() == weth_lower:
@@ -609,8 +643,8 @@ class SniperBot:
         token_info = await self.analyzer.analyze(new_token)
         new_pair.token_info = token_info
 
-        # Check liquidity
-        native_liq, usd_liq = self._get_pair_liquidity(pair_address)
+        # Check liquidity (async)
+        native_liq, usd_liq = await self._get_pair_liquidity(pair_address)
         new_pair.liquidity_native = native_liq
         new_pair.liquidity_usd = usd_liq
 
@@ -701,6 +735,17 @@ class SniperBot:
     async def run(self):
         """Main loop — polls for PairCreated events."""
         self.running = True
+
+        # Create shared HTTP session for all API calls
+        self._http_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15),
+            connector=aiohttp.TCPConnector(limit=20, ttl_dns_cache=300),
+        )
+        self.analyzer._session = self._http_session
+
+        # Refresh semaphore from settings
+        self._sem = asyncio.Semaphore(int(self.settings.get("max_concurrent", 5)))
+
         await self._emit("bot_status", {"status": "starting", "chain_id": self.chain_id})
 
         # Show RPC connection info
@@ -746,7 +791,8 @@ class SniperBot:
                 if current_block > last_block:
                     # Scan new blocks for PairCreated events
                     from_block = last_block + 1
-                    to_block = min(current_block, from_block + 2)  # max 2 blocks
+                    max_range = int(self.settings.get("block_range", 5))
+                    to_block = min(current_block, from_block + max_range - 1)
                     blocks_range = to_block - from_block + 1
 
                     await self._emit("scan_block", {
@@ -778,7 +824,7 @@ class SniperBot:
                             self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                             new_rpc = self._rpc_list[self._rpc_index]
                             self.w3 = Web3(Web3.HTTPProvider(new_rpc))
-                            self.analyzer = ContractAnalyzer(self.w3, self.chain_id)
+                            self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
                             await self._emit("scan_info", {
                                 "message": f"Switched RPC → {new_rpc}",
                             })
@@ -796,19 +842,21 @@ class SniperBot:
                             "total_events": total_events_found,
                         })
 
+                        # Launch ALL pair analyses in parallel (semaphore limits concurrency)
+                        tasks = []
                         for log in logs:
                             try:
-                                # Decode PairCreated event
                                 token0 = "0x" + log["topics"][1].hex()[-40:]
                                 token1 = "0x" + log["topics"][2].hex()[-40:]
-                                # pair address is in the data
                                 pair_addr = "0x" + log["data"].hex()[26:66]
-
-                                await self._handle_new_pair(
-                                    pair_addr, token0, token1, log["blockNumber"]
+                                tasks.append(
+                                    self._handle_new_pair(pair_addr, token0, token1, log["blockNumber"])
                                 )
                             except Exception as e:
                                 logger.debug(f"Log decode error: {e}")
+
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
                     else:
                         await self._emit("scan_error", {
                             "message": f"All RPCs failed for blocks {from_block}-{to_block}: {last_rpc_err}",
@@ -844,7 +892,12 @@ class SniperBot:
                 logger.warning(f"Sniper loop error: {e}")
                 await self._emit("error", {"message": str(e)[:200]})
 
-            await asyncio.sleep(3)  # poll every 3 seconds
+            await asyncio.sleep(float(self.settings.get("poll_interval", 1.5)))
+
+        # Cleanup shared session
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
 
         await self._emit("bot_status", {"status": "stopped"})
 
@@ -854,7 +907,7 @@ class SniperBot:
             if snipe.status != "active":
                 continue
             try:
-                current_price = self._get_token_price_usd(snipe.token_address)
+                current_price = await self._get_token_price_usd(snipe.token_address)
                 if current_price > 0 and snipe.buy_price_usd > 0:
                     snipe.current_price_usd = current_price
                     snipe.pnl_percent = ((current_price - snipe.buy_price_usd) / snipe.buy_price_usd) * 100
@@ -903,6 +956,9 @@ class SniperBot:
                     self.settings[k] = int(v)
                 else:
                     self.settings[k] = v
+        # Refresh semaphore if concurrency changed
+        new_max = int(self.settings.get("max_concurrent", 5))
+        self._sem = asyncio.Semaphore(new_max)
 
     def get_state(self) -> dict:
         """Return full bot state for frontend sync."""
