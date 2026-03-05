@@ -152,10 +152,29 @@ class TokenInfo:
     has_trading_cooldown: bool = False
     personal_slippage_modifiable: bool = False
     is_anti_whale: bool = False
-    is_open_source: bool = True
+    is_open_source: bool = False
     lp_holder_count: int = 0
     holder_count: int = 0
     creator_address: str = ""
+    # ── Cross-platform verification ──
+    listed_coingecko: bool = False
+    coingecko_id: str = ""
+    dexscreener_pairs: int = 0
+    dexscreener_volume_24h: float = 0
+    dexscreener_liquidity: float = 0
+    dexscreener_buys_24h: int = 0
+    dexscreener_sells_24h: int = 0
+    dexscreener_age_hours: float = 0
+    has_social_links: bool = False
+    has_website: bool = False
+    tokensniffer_score: int = -1        # 0–100, -1 = no data
+    tokensniffer_is_scam: bool = False
+    # API tracking — did we actually get data?
+    _goplus_ok: bool = False
+    _honeypot_ok: bool = False
+    _dexscreener_ok: bool = False
+    _coingecko_ok: bool = False
+    _tokensniffer_ok: bool = False
     # Overall
     risk: str = "unknown"
     risk_reasons: list = field(default_factory=list)
@@ -254,10 +273,13 @@ class ContractAnalyzer:
             except Exception:
                 info.has_owner = False
 
-            # Run API checks in parallel (honeypot.is + GoPlus)
+            # Run API checks in parallel (honeypot.is + GoPlus + DexScreener + CoinGecko + TokenSniffer)
             await asyncio.gather(
                 self._check_honeypot_api(info),
                 self._check_goplus_api(info),
+                self._check_dexscreener_api(info),
+                self._check_coingecko_api(info),
+                self._check_tokensniffer_api(info),
                 return_exceptions=True,
             )
 
@@ -294,6 +316,8 @@ class ContractAnalyzer:
                         info.buy_tax = sim.get("buyTax", 0)
                         info.sell_tax = sim.get("sellTax", 0)
 
+                        info._honeypot_ok = True   # API returned valid data
+
                         if info.is_honeypot:
                             info.risk_reasons.append("🍯 HONEYPOT — no puedes vender")
                         if info.buy_tax > 10:
@@ -326,6 +350,8 @@ class ContractAnalyzer:
             result = data.get("result", {}).get(addr, {})
             if not result:
                 return
+
+            info._goplus_ok = True   # GoPlus returned valid data
 
             # Helper: GoPlus returns "1"/"0" strings
             def flag(key):
@@ -406,8 +432,151 @@ class ContractAnalyzer:
         except Exception as e:
             logger.debug(f"GoPlus API failed for {info.address}: {e}")
 
+    # ─── DexScreener API ───────────────────────────────────
+    async def _check_dexscreener_api(self, info: TokenInfo):
+        """Use DexScreener API to check trading activity and social presence (free, no key)."""
+        try:
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{info.address}"
+            own_session = self._session is None or self._session.closed
+            session = await self._get_session() if not own_session else aiohttp.ClientSession()
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+            finally:
+                if own_session:
+                    await session.close()
+
+            pairs = data.get("pairs") or []
+            if not pairs:
+                return
+
+            info._dexscreener_ok = True
+            info.dexscreener_pairs = len(pairs)
+
+            # Use the highest-liquidity pair as reference
+            best = max(pairs, key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0))
+
+            info.dexscreener_liquidity = float(best.get("liquidity", {}).get("usd", 0) or 0)
+
+            vol = best.get("volume", {})
+            info.dexscreener_volume_24h = float(vol.get("h24", 0) or 0)
+
+            txns = best.get("txns", {}).get("h24", {})
+            info.dexscreener_buys_24h = int(txns.get("buys", 0) or 0)
+            info.dexscreener_sells_24h = int(txns.get("sells", 0) or 0)
+
+            # Pair age
+            created = best.get("pairCreatedAt")
+            if created:
+                age_ms = time.time() * 1000 - float(created)
+                info.dexscreener_age_hours = round(max(0, age_ms / 3_600_000), 1)
+
+            # Social / website (from token info block)
+            token_info_block = best.get("info", {})
+            socials = token_info_block.get("socials", [])
+            websites = token_info_block.get("websites", [])
+            info.has_social_links = len(socials) > 0
+            info.has_website = len(websites) > 0
+
+            # ── DexScreener-based risk signals ──
+            if info.dexscreener_age_hours < 1:
+                info.risk_reasons.append("🔜 Par creado hace menos de 1 hora")
+            if info.dexscreener_volume_24h < 100 and info.dexscreener_pairs <= 1:
+                info.risk_reasons.append("📊 Volumen 24h muy bajo (<$100)")
+            total_txns = info.dexscreener_buys_24h + info.dexscreener_sells_24h
+            if total_txns < 5:
+                info.risk_reasons.append(f"👥 Muy pocas transacciones ({total_txns} en 24h)")
+
+            logger.info(f"DexScreener for {info.symbol}: {info.dexscreener_pairs} pairs, ${info.dexscreener_volume_24h:.0f} vol")
+
+        except Exception as e:
+            logger.debug(f"DexScreener API failed for {info.address}: {e}")
+
+    # ─── CoinGecko API ────────────────────────────────────
+    async def _check_coingecko_api(self, info: TokenInfo):
+        """Check if token is listed on CoinGecko (free, no key). Listing = legitimacy signal."""
+        try:
+            platform = "binance-smart-chain" if self.chain_id == 56 else "ethereum"
+            url = f"https://api.coingecko.com/api/v3/coins/{platform}/contract/{info.address.lower()}"
+            own_session = self._session is None or self._session.closed
+            session = await self._get_session() if not own_session else aiohttp.ClientSession()
+            try:
+                headers = {"accept": "application/json"}
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 404:
+                        # Not listed — valid response, record it
+                        info._coingecko_ok = True
+                        info.listed_coingecko = False
+                        return
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+            finally:
+                if own_session:
+                    await session.close()
+
+            info._coingecko_ok = True
+            info.listed_coingecko = True
+            info.coingecko_id = data.get("id", "")
+
+            logger.info(f"CoinGecko: {info.symbol} IS listed (id={info.coingecko_id})")
+
+        except Exception as e:
+            logger.debug(f"CoinGecko API failed for {info.address}: {e}")
+
+    # ─── TokenSniffer API ──────────────────────────────────
+    async def _check_tokensniffer_api(self, info: TokenInfo):
+        """Check TokenSniffer for scam score (free, no key for basic queries)."""
+        try:
+            chain_slug = "bsc" if self.chain_id == 56 else "eth"
+            url = f"https://tokensniffer.com/api/v2/tokens/{self.chain_id}/{info.address.lower()}?include_metrics=true&include_tests=true&block_until_ready=false"
+            own_session = self._session is None or self._session.closed
+            session = await self._get_session() if not own_session else aiohttp.ClientSession()
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+            finally:
+                if own_session:
+                    await session.close()
+
+            score = data.get("score")
+            if score is not None:
+                info._tokensniffer_ok = True
+                info.tokensniffer_score = int(score)
+                info.tokensniffer_is_scam = data.get("is_flagged", False)
+
+                if info.tokensniffer_is_scam:
+                    info.risk_reasons.append(f"🚩 TokenSniffer: FLAGGED como scam (score {info.tokensniffer_score}/100)")
+                elif info.tokensniffer_score < 30:
+                    info.risk_reasons.append(f"🚩 TokenSniffer score muy bajo: {info.tokensniffer_score}/100")
+                elif info.tokensniffer_score < 50:
+                    info.risk_reasons.append(f"⚠️ TokenSniffer score bajo: {info.tokensniffer_score}/100")
+
+                logger.info(f"TokenSniffer for {info.symbol}: score={info.tokensniffer_score}, flagged={info.tokensniffer_is_scam}")
+
+        except Exception as e:
+            logger.debug(f"TokenSniffer API failed for {info.address}: {e}")
+
     def _calculate_risk(self, info: TokenInfo):
         """Calculate overall risk level based on ALL collected data."""
+
+        # How many APIs responded?
+        api_count = sum([
+            info._goplus_ok, info._honeypot_ok,
+            info._dexscreener_ok, info._coingecko_ok,
+            info._tokensniffer_ok,
+        ])
+
+        # If NO API returned data → unknown
+        if api_count == 0:
+            info.risk = "unknown"
+            info.risk_reasons.append("❓ Sin datos de APIs de seguridad")
+            return
+
         # ── DANGER: instant red flags ──
         danger_flags = [
             info.is_honeypot,
@@ -415,6 +584,8 @@ class ContractAnalyzer:
             info.owner_can_change_balance,
             info.sell_tax > 30 or info.buy_tax > 30,
             info.cannot_sell_all,
+            info.tokensniffer_is_scam,
+            info.tokensniffer_score != -1 and info.tokensniffer_score < 20,
         ]
         if any(danger_flags):
             info.risk = "danger"
@@ -433,7 +604,11 @@ class ContractAnalyzer:
             info.personal_slippage_modifiable,
             info.sell_tax > 10 or info.buy_tax > 10,
             info.has_owner,
-            not info.is_open_source,
+            not info.is_open_source if info._goplus_ok else False,
+            # Cross-platform signals
+            info._dexscreener_ok and info.dexscreener_age_hours < 1,
+            info._dexscreener_ok and (info.dexscreener_buys_24h + info.dexscreener_sells_24h) < 5,
+            info._tokensniffer_ok and 20 <= info.tokensniffer_score < 50,
         ]
         warning_count = sum(1 for f in warning_flags if f)
 
@@ -445,7 +620,16 @@ class ContractAnalyzer:
             info.risk = "warning"
             return
 
-        info.risk = "safe"
+        # Only mark "safe" if we have good API coverage
+        if api_count >= 2 and (info._goplus_ok or info._tokensniffer_ok):
+            # Bonus: listed on CoinGecko is a strong positive signal
+            if info.listed_coingecko:
+                info.risk_reasons.append("✅ Listado en CoinGecko")
+            info.risk = "safe"
+        else:
+            # Partial data only
+            info.risk = "warning"
+            info.risk_reasons.append(f"⚠️ Solo {api_count} API(s) respondieron — datos parciales")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -686,6 +870,25 @@ class SniperBot:
             "is_open_source": token_info.is_open_source,
             "holder_count": token_info.holder_count,
             "total_supply": token_info.total_supply,
+            # Cross-platform data
+            "listed_coingecko": token_info.listed_coingecko,
+            "coingecko_id": token_info.coingecko_id,
+            "dexscreener_pairs": token_info.dexscreener_pairs,
+            "dexscreener_volume_24h": token_info.dexscreener_volume_24h,
+            "dexscreener_liquidity": token_info.dexscreener_liquidity,
+            "dexscreener_buys_24h": token_info.dexscreener_buys_24h,
+            "dexscreener_sells_24h": token_info.dexscreener_sells_24h,
+            "dexscreener_age_hours": token_info.dexscreener_age_hours,
+            "has_social_links": token_info.has_social_links,
+            "has_website": token_info.has_website,
+            "tokensniffer_score": token_info.tokensniffer_score,
+            "tokensniffer_is_scam": token_info.tokensniffer_is_scam,
+            # API status
+            "goplus_ok": token_info._goplus_ok,
+            "honeypot_ok": token_info._honeypot_ok,
+            "dexscreener_ok": token_info._dexscreener_ok,
+            "coingecko_ok": token_info._coingecko_ok,
+            "tokensniffer_ok": token_info._tokensniffer_ok,
         })
 
         self.detected_pairs.append(new_pair)

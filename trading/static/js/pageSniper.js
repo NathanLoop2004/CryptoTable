@@ -348,14 +348,48 @@
         if (state.detected_pairs) {
             allDetected = [];
             state.detected_pairs.forEach(p => {
+                const ti = p.token_info || {};
                 allDetected.push({
                     token: p.new_token,
-                    symbol: p.token_info ? p.token_info.symbol : "?",
-                    name: p.token_info ? p.token_info.name : "Unknown",
-                    risk: p.token_info ? p.token_info.risk : "unknown",
-                    buy_tax: p.token_info ? p.token_info.buy_tax : null,
-                    sell_tax: p.token_info ? p.token_info.sell_tax : null,
-                    is_honeypot: p.token_info ? p.token_info.is_honeypot : false,
+                    symbol: ti.symbol || "?",
+                    name: ti.name || "Unknown",
+                    risk: ti.risk || "unknown",
+                    buy_tax: ti.buy_tax ?? null,
+                    sell_tax: ti.sell_tax ?? null,
+                    is_honeypot: !!ti.is_honeypot,
+                    has_owner: !!ti.has_owner,
+                    is_mintable: !!ti.is_mintable,
+                    has_blacklist: !!ti.has_blacklist,
+                    can_pause_trading: !!ti.can_pause_trading,
+                    is_proxy: !!ti.is_proxy,
+                    has_hidden_owner: !!ti.has_hidden_owner,
+                    can_self_destruct: !!ti.can_self_destruct,
+                    cannot_sell_all: !!ti.cannot_sell_all,
+                    owner_can_change_balance: !!ti.owner_can_change_balance,
+                    is_open_source: !!ti.is_open_source,
+                    holder_count: ti.holder_count || 0,
+                    total_supply: ti.total_supply || 0,
+                    risk_reasons: ti.risk_reasons || [],
+                    // API status
+                    goplus_ok: !!ti._goplus_ok,
+                    honeypot_ok: !!ti._honeypot_ok,
+                    dexscreener_ok: !!ti._dexscreener_ok,
+                    coingecko_ok: !!ti._coingecko_ok,
+                    tokensniffer_ok: !!ti._tokensniffer_ok,
+                    // Cross-platform
+                    listed_coingecko: !!ti.listed_coingecko,
+                    coingecko_id: ti.coingecko_id || "",
+                    dexscreener_pairs: ti.dexscreener_pairs || 0,
+                    dexscreener_volume_24h: ti.dexscreener_volume_24h || 0,
+                    dexscreener_liquidity: ti.dexscreener_liquidity || 0,
+                    dexscreener_buys_24h: ti.dexscreener_buys_24h || 0,
+                    dexscreener_sells_24h: ti.dexscreener_sells_24h || 0,
+                    dexscreener_age_hours: ti.dexscreener_age_hours || 0,
+                    has_social_links: !!ti.has_social_links,
+                    has_website: !!ti.has_website,
+                    tokensniffer_score: ti.tokensniffer_score ?? -1,
+                    tokensniffer_is_scam: !!ti.tokensniffer_is_scam,
+                    // Liquidity
                     liquidity_usd: p.liquidity_usd || 0,
                     has_liquidity: (p.liquidity_usd || 0) >= parseFloat(setMinLiq.value || 5000),
                     pair: p.pair_address,
@@ -472,11 +506,26 @@
             if (data.has_hidden_owner)          flags.push({icon:"👤", label:"Hidden owner", cls:"flag-warn"});
             if (data.has_owner)                 flags.push({icon:"👑", label:"Has owner",   cls:"flag-warn"});
             if (data.is_open_source === false)  flags.push({icon:"🔒", label:"Not verified",cls:"flag-warn"});
-            // Safe flags
-            if (!data.is_honeypot && data.risk === "safe") flags.push({icon:"✅", label:"Safe", cls:"flag-safe"});
-            if (data.is_open_source === true && flags.every(f => f.cls !== "flag-warn" || f.label !== "Not verified")) {
-                // Only show verified if it IS verified
-                if (data.is_open_source) flags.push({icon:"📝", label:"Verified", cls:"flag-safe"});
+            // Safe flags — only trust API-confirmed data
+            if (!data.is_honeypot && data.risk === "safe" && data.goplus_ok) flags.push({icon:"✅", label:"Safe", cls:"flag-safe"});
+            if (data.is_open_source === true && data.goplus_ok) {
+                flags.push({icon:"📝", label:"Verified", cls:"flag-safe"});
+            }
+            // Cross-platform flags
+            if (data.listed_coingecko)              flags.push({icon:"🦎", label:"CoinGecko", cls:"flag-safe"});
+            if (data.coingecko_ok && !data.listed_coingecko) flags.push({icon:"🦎", label:"No CoinGecko", cls:"flag-warn"});
+            if (data.tokensniffer_is_scam)           flags.push({icon:"🚩", label:"Scam (TS)", cls:"flag-danger"});
+            if (data.tokensniffer_ok && data.tokensniffer_score >= 0 && data.tokensniffer_score < 30)
+                flags.push({icon:"🚩", label:`TS ${data.tokensniffer_score}/100`, cls:"flag-danger"});
+            if (data.tokensniffer_ok && data.tokensniffer_score >= 30 && data.tokensniffer_score < 60)
+                flags.push({icon:"⚠️", label:`TS ${data.tokensniffer_score}/100`, cls:"flag-warn"});
+            if (data.tokensniffer_ok && data.tokensniffer_score >= 60)
+                flags.push({icon:"✅", label:`TS ${data.tokensniffer_score}/100`, cls:"flag-safe"});
+            if (data.has_website)                   flags.push({icon:"🌐", label:"Website", cls:"flag-safe"});
+            if (data.has_social_links)              flags.push({icon:"📱", label:"Socials", cls:"flag-safe"});
+            // No API data indicator
+            if (!data.goplus_ok && !data.honeypot_ok && !data.dexscreener_ok && !data.coingecko_ok) {
+                flags.push({icon:"❓", label:"Sin datos API", cls:"flag-warn"});
             }
 
             const flagsHtml = flags.map(f =>
@@ -521,10 +570,32 @@
             // Expandable detail row (hidden by default)
             const detailTr = document.createElement("tr");
             detailTr.className = "detail-row hidden";
+
+            // Build cross-platform info block
+            const apiParts = [];
+            if (data.goplus_ok)       apiParts.push('<span class="api-badge api-ok">🛡️ GoPlus</span>');
+            else                      apiParts.push('<span class="api-badge api-fail">🛡️ GoPlus ✗</span>');
+            if (data.honeypot_ok)     apiParts.push('<span class="api-badge api-ok">🍯 Honeypot.is</span>');
+            else                      apiParts.push('<span class="api-badge api-fail">🍯 Honeypot.is ✗</span>');
+            if (data.dexscreener_ok)  apiParts.push('<span class="api-badge api-ok">📊 DexScreener</span>');
+            else                      apiParts.push('<span class="api-badge api-fail">📊 DexScreener ✗</span>');
+            if (data.coingecko_ok)    apiParts.push(`<span class="api-badge ${data.listed_coingecko ? 'api-ok' : 'api-warn'}">🦎 CoinGecko ${data.listed_coingecko ? '✓' : 'No listado'}</span>`);
+            else                      apiParts.push('<span class="api-badge api-fail">🦎 CoinGecko ✗</span>');
+            if (data.tokensniffer_ok) apiParts.push(`<span class="api-badge ${data.tokensniffer_score >= 50 ? 'api-ok' : 'api-warn'}">🐽 TS: ${data.tokensniffer_score}/100</span>`);
+            else                      apiParts.push('<span class="api-badge api-fail">🐽 TokenSniffer ✗</span>');
+
+            // DexScreener extra data
+            let dexExtra = "";
+            if (data.dexscreener_ok) {
+                dexExtra = `<div class="dt-extra">📊 Vol 24h: $${Number(data.dexscreener_volume_24h || 0).toLocaleString()} | Pares: ${data.dexscreener_pairs || 0} | Buys: ${data.dexscreener_buys_24h || 0} / Sells: ${data.dexscreener_sells_24h || 0} | Edad: ${data.dexscreener_age_hours ? data.dexscreener_age_hours + "h" : "?"}</div>`;
+            }
+
             detailTr.innerHTML = `<td colspan="7">
                 <div class="detail-panel">
                     <div class="sec-flags-row">${flagsHtml || '<span class="sec-flag flag-safe">✅ Sin flags detectados</span>'}</div>
                     ${reasonsHtml}
+                    <div class="dt-apis-row">${apiParts.join("")}</div>
+                    ${dexExtra}
                     ${data.holder_count ? `<div class="dt-extra">👥 Holders: ${data.holder_count} | Supply: ${data.total_supply ? Number(data.total_supply).toLocaleString() : "?"}</div>` : ""}
                 </div>
             </td>`;

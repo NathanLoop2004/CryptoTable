@@ -1954,6 +1954,42 @@ body.resizing-col *, body.resizing-row * {
     color: #6c7284;
 }
 
+/* ═══ API Status Badges ═══ */
+.dt-apis-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,.06);
+}
+.api-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: .7em;
+    font-weight: 600;
+    letter-spacing: .02em;
+}
+.api-badge.api-ok {
+    background: rgba(14,203,129,.12);
+    color: #0ecb81;
+    border: 1px solid rgba(14,203,129,.25);
+}
+.api-badge.api-warn {
+    background: rgba(240,185,11,.10);
+    color: #f0b90b;
+    border: 1px solid rgba(240,185,11,.25);
+}
+.api-badge.api-fail {
+    background: rgba(108,114,132,.08);
+    color: #4a4f5c;
+    border: 1px solid rgba(108,114,132,.15);
+    text-decoration: line-through;
+}
+
 /* ═══ Legend / Help Panel ═══ */
 .dft-tab-help {
     margin-left: auto;
