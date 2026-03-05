@@ -293,6 +293,38 @@
         </div>
     </div>
 
+    <!-- ════ Token Chart Modal ════ -->
+    <div class="modal-overlay" id="chart-modal" style="display:none;">
+        <div class="modal-box modal-chart">
+            <div class="modal-header">
+                <div class="chart-modal-title">
+                    <h3 class="modal-title" id="chart-modal-symbol">📈 Token Chart</h3>
+                    <div class="chart-modal-meta" id="chart-modal-meta"></div>
+                </div>
+                <div class="chart-modal-actions">
+                    <div class="chart-tf-bar">
+                        <button class="chart-tf-btn active" data-tf="5m">5m</button>
+                        <button class="chart-tf-btn" data-tf="1h">1H</button>
+                        <button class="chart-tf-btn" data-tf="6h">6H</button>
+                        <button class="chart-tf-btn" data-tf="24h">1D</button>
+                    </div>
+                    <button class="modal-close" id="btn-close-chart-modal">✕</button>
+                </div>
+            </div>
+            <div class="modal-body chart-modal-body">
+                <div class="chart-modal-info-bar" id="chart-info-bar">
+                    <span class="cmi-price" id="cmi-price">—</span>
+                    <span class="cmi-change" id="cmi-change"></span>
+                    <span class="cmi-vol" id="cmi-vol"></span>
+                    <span class="cmi-liq" id="cmi-liq"></span>
+                </div>
+                <div class="chart-modal-container" id="chart-modal-container">
+                    <div class="chart-loading" id="chart-loading">Cargando gráfico…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
             <!-- Active Snipes -->
             <div class="sniper-card">
                 <h3 class="sc-title">💼 Active Positions</h3>
@@ -328,6 +360,8 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
+        crossorigin="anonymous"></script>
 <script src="{% static 'js/walletConnect.js' %}"></script>
 <script src="{% static 'js/pageSniper.js' %}"></script>
 {% endblock %}

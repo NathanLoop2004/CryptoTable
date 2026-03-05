@@ -96,6 +96,19 @@
     const btnCloseDetected = $("btn-close-detected");
     const detectedBadge    = $("detected-badge");
 
+    // Chart modal
+    const chartModal        = $("chart-modal");
+    const chartModalSymbol  = $("chart-modal-symbol");
+    const chartModalMeta    = $("chart-modal-meta");
+    const chartModalContainer = $("chart-modal-container");
+    const chartLoading      = $("chart-loading");
+    const chartInfoBar      = $("chart-info-bar");
+    const cmiPrice          = $("cmi-price");
+    const cmiChange         = $("cmi-change");
+    const cmiVol            = $("cmi-vol");
+    const cmiLiq            = $("cmi-liq");
+    const btnCloseChartModal = $("btn-close-chart-modal");
+
     /* ═══════════════════════════════════════════════════════════════
      *  State
      * ═══════════════════════════════════════════════════════════════ */
@@ -105,6 +118,14 @@
     let detectedTokens = [];     // [{token, symbol, name, risk, buy_tax, sell_tax, liquidity_usd, pair}]
     let activeSnipes = [];
     let activeFilter = "all";    // current tab filter
+
+    // Chart state
+    let tokenChart = null;
+    let tokenCandleSeries = null;
+    let tokenVolumeSeries = null;
+    let chartTimeframe = "5m";
+    let chartCurrentToken = null;  // {token, symbol, pair}
+    let chartRefreshTimer = null;
 
     // Pipeline counters
     let pipeStats = {
@@ -559,6 +580,11 @@
                     <a class="btn-sniper btn-mini btn-view-dex"
                        href="https://dexscreener.com/${dexChain}/${data.token}"
                        target="_blank" rel="noopener" title="DEX Screener">📊</a>
+                    <button class="btn-sniper btn-mini btn-view-chart"
+                        data-token="${data.token || ""}"
+                        data-symbol="${data.symbol || "?"}"
+                        data-pair="${data.pair || ""}"
+                        title="Ver gráfico de precio">📈</button>
                     ${hasLiq ? `<button class="btn-sniper btn-mini btn-buy-snipe"
                         data-token="${data.token || ""}"
                         data-symbol="${data.symbol || "?"}"
@@ -618,6 +644,260 @@
         addAllDetected(data);
     }
 
+    /* ═══════════════════════════════════════════════════════════════
+     *  Token Chart (DexScreener OHLCV)
+     * ═══════════════════════════════════════════════════════════════ */
+
+    /** Open chart modal for a token */
+    async function openTokenChart(token, symbol, pair) {
+        chartCurrentToken = { token, symbol, pair };
+        chartModal.style.display = "flex";
+        chartModalSymbol.textContent = `📈 ${symbol || "Token"}`;
+        chartModalMeta.innerHTML = `<span class="cmi-addr">${token ? token.slice(0, 8) + "…" + token.slice(-6) : ""}</span>`;
+
+        // Reset info bar
+        cmiPrice.textContent = "—";
+        cmiChange.textContent = "";
+        cmiChange.className = "cmi-change";
+        cmiVol.textContent = "";
+        cmiLiq.textContent = "";
+        chartLoading.style.display = "flex";
+
+        // Set active timeframe button
+        document.querySelectorAll(".chart-tf-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === chartTimeframe));
+
+        // Build chart
+        buildTokenChart();
+
+        // Fetch and render data
+        await fetchTokenChartData(token, pair);
+
+        // Auto-refresh every 30 seconds
+        clearInterval(chartRefreshTimer);
+        chartRefreshTimer = setInterval(() => {
+            if (chartModal.style.display !== "none" && chartCurrentToken) {
+                fetchTokenChartData(chartCurrentToken.token, chartCurrentToken.pair);
+            }
+        }, 30000);
+    }
+
+    /** Build the lightweight-charts instance for the token chart */
+    function buildTokenChart() {
+        if (tokenChart) { tokenChart.remove(); tokenChart = null; tokenCandleSeries = null; tokenVolumeSeries = null; }
+
+        // Ensure container is visible and has dimensions
+        chartLoading.style.display = "flex";
+        const container = chartModalContainer;
+        const w = container.clientWidth || 800;
+        const h = container.clientHeight || 420;
+
+        tokenChart = LightweightCharts.createChart(container, {
+            width: w,
+            height: h,
+            layout: {
+                background: { color: "#0b0e13" },
+                textColor: "#848E9C",
+                fontSize: 11,
+            },
+            grid: {
+                vertLines: { color: "rgba(43,49,57,0.4)" },
+                horzLines: { color: "rgba(43,49,57,0.4)" },
+            },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: {
+                borderColor: "#2B3139",
+                scaleMargins: { top: 0.05, bottom: 0.2 },
+            },
+            timeScale: {
+                borderColor: "#2B3139",
+                timeVisible: true,
+                secondsVisible: chartTimeframe === "5m",
+            },
+        });
+
+        // Volume series
+        tokenVolumeSeries = tokenChart.addHistogramSeries({
+            priceFormat: { type: "volume" },
+            priceScaleId: "vol",
+            color: "rgba(240,185,11,0.2)",
+        });
+        tokenChart.priceScale("vol").applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0 },
+        });
+
+        // Candlestick series
+        tokenCandleSeries = tokenChart.addCandlestickSeries({
+            upColor: "#0ECB81",
+            downColor: "#F6465D",
+            borderUpColor: "#0ECB81",
+            borderDownColor: "#F6465D",
+            wickUpColor: "#0ECB81",
+            wickDownColor: "#F6465D",
+        });
+
+        // OHLC on crosshair
+        tokenChart.subscribeCrosshairMove(param => {
+            if (!param || !param.time) return;
+            const d = param.seriesData.get(tokenCandleSeries);
+            if (d && d.open !== undefined) {
+                cmiPrice.textContent = `O ${fmtPrice(d.open)}  H ${fmtPrice(d.high)}  L ${fmtPrice(d.low)}  C ${fmtPrice(d.close)}`;
+            }
+        });
+
+        // Responsive
+        const ro = new ResizeObserver(() => {
+            if (tokenChart) tokenChart.applyOptions({
+                width: container.clientWidth || 800,
+                height: container.clientHeight || 420,
+            });
+        });
+        ro.observe(container);
+    }
+
+    /** Format a price with dynamic decimals */
+    function fmtPrice(v) {
+        if (v == null || !isFinite(v)) return "—";
+        if (v === 0) return "0";
+        if (v >= 1)     return v.toFixed(2);
+        if (v >= 0.001) return v.toFixed(6);
+        return v.toFixed(12);
+    }
+
+    /** Fetch OHLCV data from DexScreener for a token */
+    async function fetchTokenChartData(token, pair) {
+        if (!tokenCandleSeries) return;
+
+        const chain = chainSelect.value === "56" ? "bsc" : "ethereum";
+        const address = pair || token; // prefer pair address if available
+
+        try {
+            // DexScreener pairs endpoint for basic info
+            const pairsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
+            let pairData = null;
+            let pairAddress = address;
+
+            if (pairsRes.ok) {
+                const pairsJson = await pairsRes.json();
+                if (pairsJson.pairs && pairsJson.pairs.length > 0) {
+                    // Pick the pair with highest liquidity on our chain
+                    const chainPairs = pairsJson.pairs.filter(p => p.chainId === chain);
+                    pairData = chainPairs.length > 0
+                        ? chainPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]
+                        : pairsJson.pairs[0];
+                    pairAddress = pairData.pairAddress || address;
+
+                    // Update info bar with real-time data
+                    const price = parseFloat(pairData.priceUsd) || 0;
+                    cmiPrice.textContent = `$${fmtPrice(price)}`;
+
+                    const change = pairData.priceChange?.h24 ?? null;
+                    if (change !== null) {
+                        const pct = parseFloat(change);
+                        cmiChange.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}% (24h)`;
+                        cmiChange.className = `cmi-change ${pct >= 0 ? "cmi-up" : "cmi-down"}`;
+                    }
+
+                    const vol = pairData.volume?.h24 || 0;
+                    cmiVol.textContent = vol > 0 ? `Vol: $${Number(vol).toLocaleString()}` : "";
+
+                    const liq = pairData.liquidity?.usd || 0;
+                    cmiLiq.textContent = liq > 0 ? `Liq: $${Number(liq).toLocaleString()}` : "";
+                }
+            }
+
+            // Fetch OHLCV candles from DexScreener
+            // DexScreener doesn't have a public candles API, so we build candles from price history
+            // We'll use the GeckoTerminal OHLCV API instead (free, no key needed)
+            const geckoChain = chainSelect.value === "56" ? "bsc" : "eth";
+            const tfMap = { "5m": "minute", "1h": "hour", "6h": "hour", "24h": "day" };
+            const aggrMap = { "5m": 5, "1h": 1, "6h": 1, "24h": 1 };
+            const limitMap = { "5m": 300, "1h": 168, "6h": 168, "24h": 90 };
+
+            const tf = tfMap[chartTimeframe] || "hour";
+            const aggr = aggrMap[chartTimeframe] || 1;
+            const limit = limitMap[chartTimeframe] || 100;
+
+            const ohlcvUrl = `https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools/${pairAddress}/ohlcv/${tf}?aggregate=${aggr}&limit=${limit}&currency=usd`;
+            const ohlcvRes = await fetch(ohlcvUrl, {
+                headers: { "Accept": "application/json" }
+            });
+
+            if (ohlcvRes.ok) {
+                const ohlcvJson = await ohlcvRes.json();
+                const ohlcvList = ohlcvJson.data?.attributes?.ohlcv_list || [];
+
+                if (ohlcvList.length === 0) {
+                    chartLoading.textContent = "No hay datos de precio disponibles aún";
+                    chartLoading.style.display = "flex";
+                    return;
+                }
+
+                // GeckoTerminal OHLCV format: [timestamp, open, high, low, close, volume]
+                // Sorted newest first → reverse for chart
+                const candles = [];
+                const volumes = [];
+
+                const sorted = [...ohlcvList].reverse();
+                for (const kline of sorted) {
+                    const time = Math.floor(kline[0]);
+                    const o = parseFloat(kline[1]);
+                    const h = parseFloat(kline[2]);
+                    const l = parseFloat(kline[3]);
+                    const c = parseFloat(kline[4]);
+                    const v = parseFloat(kline[5]);
+
+                    candles.push({ time, open: o, high: h, low: l, close: c });
+                    volumes.push({
+                        time,
+                        value: v,
+                        color: c >= o ? "rgba(14,203,129,0.3)" : "rgba(246,70,93,0.3)"
+                    });
+                }
+
+                tokenCandleSeries.setData(candles);
+                tokenVolumeSeries.setData(volumes);
+                tokenChart.timeScale().fitContent();
+
+                // Update header price from last candle
+                if (candles.length > 0 && !pairData) {
+                    const last = candles[candles.length - 1];
+                    cmiPrice.textContent = `$${fmtPrice(last.close)}`;
+
+                    if (candles.length > 1) {
+                        const first = candles[0];
+                        const pctChange = ((last.close - first.open) / first.open) * 100;
+                        cmiChange.textContent = `${pctChange >= 0 ? "+" : ""}${pctChange.toFixed(2)}%`;
+                        cmiChange.className = `cmi-change ${pctChange >= 0 ? "cmi-up" : "cmi-down"}`;
+                    }
+                }
+
+                chartLoading.style.display = "none";
+            } else {
+                chartLoading.textContent = "No se pudo cargar el gráfico. El par puede ser muy nuevo.";
+                chartLoading.style.display = "flex";
+            }
+
+        } catch (err) {
+            console.warn("Chart fetch error:", err);
+            chartLoading.textContent = "Error cargando datos del gráfico";
+            chartLoading.style.display = "flex";
+        }
+    }
+
+    /** Close the chart modal */
+    function closeTokenChart() {
+        chartModal.style.display = "none";
+        clearInterval(chartRefreshTimer);
+        chartRefreshTimer = null;
+        chartCurrentToken = null;
+        if (tokenChart) {
+            tokenChart.remove();
+            tokenChart = null;
+            tokenCandleSeries = null;
+            tokenVolumeSeries = null;
+        }
+    }
+
     // ─── Snipes table ───────────────────────────────────
     function renderSnipes() {
         if (!activeSnipes.length) {
@@ -674,6 +954,27 @@
         if (e.target === detectedModal) detectedModal.style.display = "none";
     });
 
+    // ─── Chart modal open / close ──────────────────────
+    btnCloseChartModal.addEventListener("click", closeTokenChart);
+    chartModal.addEventListener("click", (e) => {
+        if (e.target === chartModal) closeTokenChart();
+    });
+
+    // Chart timeframe buttons
+    document.querySelectorAll(".chart-tf-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".chart-tf-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            chartTimeframe = btn.dataset.tf;
+            if (chartCurrentToken) {
+                chartLoading.textContent = "Cargando gráfico…";
+                chartLoading.style.display = "flex";
+                buildTokenChart();
+                fetchTokenChartData(chartCurrentToken.token, chartCurrentToken.pair);
+            }
+        });
+    });
+
     // ─── Legend toggle ─────────────────────────────────
     const btnLegend = document.getElementById("btn-toggle-legend");
     const legendPanel = document.getElementById("legend-panel");
@@ -725,8 +1026,19 @@
         addFeed("Saving settings…", "system");
     });
 
-    // Delegate click on "Snipe" buttons in detected table
+    // Delegate click on "Chart" and "Snipe" buttons in detected table
     detectedTbody.addEventListener("click", (e) => {
+        // Chart button
+        const chartBtn = e.target.closest(".btn-view-chart");
+        if (chartBtn) {
+            const token  = chartBtn.dataset.token;
+            const symbol = chartBtn.dataset.symbol;
+            const pair   = chartBtn.dataset.pair;
+            if (token) openTokenChart(token, symbol, pair);
+            return;
+        }
+
+        // Snipe button
         const btn = e.target.closest(".btn-buy-snipe");
         if (!btn) return;
 
