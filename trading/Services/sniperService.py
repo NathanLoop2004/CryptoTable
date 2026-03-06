@@ -245,32 +245,34 @@ class ContractAnalyzer:
         try:
             cs_addr = Web3.to_checksum_address(token_address)
             contract = self.w3.eth.contract(address=cs_addr, abi=ERC20_ABI)
+            loop = asyncio.get_event_loop()
 
-            # Basic info
-            try:
-                info.name = contract.functions.name().call()
-            except Exception:
-                info.name = "Unknown"
-            try:
-                info.symbol = contract.functions.symbol().call()
-            except Exception:
-                info.symbol = "???"
-            try:
-                info.decimals = contract.functions.decimals().call()
-            except Exception:
-                pass
-            try:
-                raw_supply = contract.functions.totalSupply().call()
+            # Basic info — run ALL RPC calls in parallel to avoid sequential waits
+            async def _safe(coro, default=None):
+                try:
+                    return await coro
+                except Exception:
+                    return default
+
+            name_t  = _safe(loop.run_in_executor(None, contract.functions.name().call), "Unknown")
+            sym_t   = _safe(loop.run_in_executor(None, contract.functions.symbol().call), "???")
+            dec_t   = _safe(loop.run_in_executor(None, contract.functions.decimals().call), 18)
+            sup_t   = _safe(loop.run_in_executor(None, contract.functions.totalSupply().call), None)
+            own_t   = _safe(loop.run_in_executor(None, contract.functions.owner().call), None)
+
+            name, symbol, decimals, raw_supply, owner = await asyncio.gather(
+                name_t, sym_t, dec_t, sup_t, own_t
+            )
+
+            info.name = name
+            info.symbol = symbol
+            info.decimals = decimals
+            if raw_supply is not None:
                 info.total_supply = raw_supply / (10 ** info.decimals)
-            except Exception:
-                pass
-
-            # Check owner
-            try:
-                owner = contract.functions.owner().call()
+            if owner is not None:
                 info.owner_address = owner
                 info.has_owner = owner != "0x0000000000000000000000000000000000000000"
-            except Exception:
+            else:
                 info.has_owner = False
 
             # Run API checks in parallel (honeypot.is + GoPlus + DexScreener + CoinGecko + TokenSniffer)
@@ -306,7 +308,7 @@ class ContractAnalyzer:
             own_session = self._session is None or self._session.closed
             session = await self._get_session() if not own_session else aiohttp.ClientSession()
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         hp = data.get("honeypotResult", {})
@@ -339,7 +341,7 @@ class ContractAnalyzer:
             own_session = self._session is None or self._session.closed
             session = await self._get_session() if not own_session else aiohttp.ClientSession()
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status != 200:
                         return
                     data = await resp.json()
@@ -440,7 +442,7 @@ class ContractAnalyzer:
             own_session = self._session is None or self._session.closed
             session = await self._get_session() if not own_session else aiohttp.ClientSession()
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status != 200:
                         return
                     data = await resp.json()
@@ -504,7 +506,7 @@ class ContractAnalyzer:
             session = await self._get_session() if not own_session else aiohttp.ClientSession()
             try:
                 headers = {"accept": "application/json"}
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                     if resp.status == 404:
                         # Not listed — valid response, record it
                         info._coingecko_ok = True
@@ -535,7 +537,7 @@ class ContractAnalyzer:
             own_session = self._session is None or self._session.closed
             session = await self._get_session() if not own_session else aiohttp.ClientSession()
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status != 200:
                         return
                     data = await resp.json()
@@ -823,12 +825,12 @@ class SniperBot:
             "block": block,
         })
 
-        # Always get basic token info (name/symbol) for display
-        token_info = await self.analyzer.analyze(new_token)
-        new_pair.token_info = token_info
+        # Run analysis + liquidity check IN PARALLEL (biggest speed-up)
+        token_info_task = asyncio.ensure_future(self.analyzer.analyze(new_token))
+        liquidity_task = asyncio.ensure_future(self._get_pair_liquidity(pair_address))
+        token_info, (native_liq, usd_liq) = await asyncio.gather(token_info_task, liquidity_task)
 
-        # Check liquidity (async)
-        native_liq, usd_liq = await self._get_pair_liquidity(pair_address)
+        new_pair.token_info = token_info
         new_pair.liquidity_native = native_liq
         new_pair.liquidity_usd = usd_liq
 

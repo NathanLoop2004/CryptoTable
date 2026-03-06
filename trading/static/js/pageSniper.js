@@ -120,10 +120,6 @@
     let activeFilter = "all";    // current tab filter
 
     // Chart state
-    let tokenChart = null;
-    let tokenCandleSeries = null;
-    let tokenVolumeSeries = null;
-    let chartTimeframe = "5m";
     let chartCurrentToken = null;  // {token, symbol, pair}
     let chartRefreshTimer = null;
 
@@ -645,10 +641,95 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════
-     *  Token Chart (DexScreener OHLCV)
+     *  Token Chart — DexScreener embed
      * ═══════════════════════════════════════════════════════════════ */
 
-    /** Open chart modal for a token */
+    /** Format a price with dynamic decimals */
+    function fmtPrice(v) {
+        if (v == null || !isFinite(v)) return "—";
+        if (v === 0) return "0";
+        if (v >= 1)     return v.toFixed(2);
+        if (v >= 0.001) return v.toFixed(6);
+        return v.toFixed(12);
+    }
+
+    /* ── DexScreener embed ─────────────────────────────────────── */
+
+    function showDexScreenerEmbed(chain, pairAddr) {
+        // Remove old iframe
+        const old = chartModalContainer.querySelector(".dex-embed-iframe");
+        if (old) old.remove();
+        // Remove fallback message if any
+        const oldMsg = chartModalContainer.querySelector(".chart-no-data");
+        if (oldMsg) oldMsg.remove();
+
+        const iframe = document.createElement("iframe");
+        iframe.className = "dex-embed-iframe";
+        iframe.src = `https://dexscreener.com/${chain}/${pairAddr}?embed=1&theme=dark&trades=0&info=0`;
+        iframe.style.cssText = "width:100%;height:100%;border:none;position:absolute;inset:0;border-radius:0;";
+        iframe.setAttribute("loading", "lazy");
+        iframe.setAttribute("allowfullscreen", "true");
+
+        chartModalContainer.appendChild(iframe);
+        chartLoading.style.display = "none";
+    }
+
+    /** Show GeckoTerminal embed as fallback */
+    function showGeckoTerminalEmbed(chain, tokenAddr) {
+        const old = chartModalContainer.querySelector(".dex-embed-iframe");
+        if (old) old.remove();
+        const oldMsg = chartModalContainer.querySelector(".chart-no-data");
+        if (oldMsg) oldMsg.remove();
+
+        const geckoChain = chain === "bsc" ? "bsc" : "eth";
+        const iframe = document.createElement("iframe");
+        iframe.className = "dex-embed-iframe";
+        iframe.src = `https://www.geckoterminal.com/${geckoChain}/pools/${tokenAddr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0`;
+        iframe.style.cssText = "width:100%;height:100%;border:none;position:absolute;inset:0;border-radius:0;";
+        iframe.setAttribute("loading", "lazy");
+        iframe.setAttribute("allowfullscreen", "true");
+
+        chartModalContainer.appendChild(iframe);
+        chartLoading.style.display = "none";
+    }
+
+    /** Show a 'no data yet' message with retry */
+    function showChartNoData(token, symbol) {
+        const old = chartModalContainer.querySelector(".chart-no-data");
+        if (old) old.remove();
+        chartLoading.style.display = "none";
+
+        const div = document.createElement("div");
+        div.className = "chart-no-data";
+        div.innerHTML = `
+            <div class="chart-no-data-icon">⏳</div>
+            <div class="chart-no-data-title">Token demasiado nuevo</div>
+            <div class="chart-no-data-desc">
+                <strong>${symbol || "Token"}</strong> acaba de ser creado en la blockchain.
+                <br>DexScreener aún no ha indexado este par.
+                <br>Espera unos minutos e intenta de nuevo.
+            </div>
+            <button class="btn-sniper btn-retry-chart" data-token="${token}" data-symbol="${symbol}">
+                🔄 Reintentar
+            </button>
+            <a class="btn-sniper btn-mini" href="https://dexscreener.com/bsc/${token}" target="_blank" rel="noopener"
+               style="margin-top:8px;font-size:.8em;opacity:.7;">Abrir en DexScreener ↗</a>
+        `;
+        chartModalContainer.appendChild(div);
+
+        // Retry handler
+        div.querySelector(".btn-retry-chart").addEventListener("click", () => {
+            div.remove();
+            chartLoading.textContent = "Reintentando…";
+            chartLoading.style.display = "flex";
+            if (chartCurrentToken) {
+                fetchTokenChartData(chartCurrentToken.token, chartCurrentToken.pair, chartCurrentToken.symbol);
+            }
+        });
+    }
+
+    /* ── Main chart flow ──────────────────────────────────────────── */
+
     async function openTokenChart(token, symbol, pair) {
         chartCurrentToken = { token, symbol, pair };
         chartModal.style.display = "flex";
@@ -661,227 +742,126 @@
         cmiChange.className = "cmi-change";
         cmiVol.textContent = "";
         cmiLiq.textContent = "";
+        chartLoading.textContent = "Cargando gráfico…";
         chartLoading.style.display = "flex";
 
-        // Set active timeframe button
-        document.querySelectorAll(".chart-tf-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === chartTimeframe));
+        // Remove any old iframe
+        const oldIframe = chartModalContainer.querySelector(".dex-embed-iframe");
+        if (oldIframe) oldIframe.remove();
 
-        // Build chart
-        buildTokenChart();
+        // Fetch and render
+        await fetchTokenChartData(token, pair, symbol);
 
-        // Fetch and render data
-        await fetchTokenChartData(token, pair);
-
-        // Auto-refresh every 30 seconds
+        // Auto-refresh info bar every 30s
         clearInterval(chartRefreshTimer);
         chartRefreshTimer = setInterval(() => {
             if (chartModal.style.display !== "none" && chartCurrentToken) {
-                fetchTokenChartData(chartCurrentToken.token, chartCurrentToken.pair);
+                fetchDexScreenerInfoSilent(chartCurrentToken.token);
             }
         }, 30000);
     }
 
-    /** Build the lightweight-charts instance for the token chart */
-    function buildTokenChart() {
-        if (tokenChart) { tokenChart.remove(); tokenChart = null; tokenCandleSeries = null; tokenVolumeSeries = null; }
+    /** Fetch DexScreener info for the info bar (silent refresh, no embed change) */
+    async function fetchDexScreenerInfoSilent(token) {
+        try {
+            const chain = chainSelect.value === "56" ? "bsc" : "ethereum";
+            const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
+            if (!res.ok) return;
+            const json = await res.json();
+            if (!json.pairs || !json.pairs.length) return;
 
-        // Ensure container is visible and has dimensions
-        chartLoading.style.display = "flex";
-        const container = chartModalContainer;
-        const w = container.clientWidth || 800;
-        const h = container.clientHeight || 420;
+            const chainPairs = json.pairs.filter(p => p.chainId === chain);
+            const best = chainPairs.length > 0
+                ? chainPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]
+                : json.pairs[0];
 
-        tokenChart = LightweightCharts.createChart(container, {
-            width: w,
-            height: h,
-            layout: {
-                background: { color: "#0b0e13" },
-                textColor: "#848E9C",
-                fontSize: 11,
-            },
-            grid: {
-                vertLines: { color: "rgba(43,49,57,0.4)" },
-                horzLines: { color: "rgba(43,49,57,0.4)" },
-            },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            rightPriceScale: {
-                borderColor: "#2B3139",
-                scaleMargins: { top: 0.05, bottom: 0.2 },
-            },
-            timeScale: {
-                borderColor: "#2B3139",
-                timeVisible: true,
-                secondsVisible: chartTimeframe === "5m",
-            },
-        });
-
-        // Volume series
-        tokenVolumeSeries = tokenChart.addHistogramSeries({
-            priceFormat: { type: "volume" },
-            priceScaleId: "vol",
-            color: "rgba(240,185,11,0.2)",
-        });
-        tokenChart.priceScale("vol").applyOptions({
-            scaleMargins: { top: 0.85, bottom: 0 },
-        });
-
-        // Candlestick series
-        tokenCandleSeries = tokenChart.addCandlestickSeries({
-            upColor: "#0ECB81",
-            downColor: "#F6465D",
-            borderUpColor: "#0ECB81",
-            borderDownColor: "#F6465D",
-            wickUpColor: "#0ECB81",
-            wickDownColor: "#F6465D",
-        });
-
-        // OHLC on crosshair
-        tokenChart.subscribeCrosshairMove(param => {
-            if (!param || !param.time) return;
-            const d = param.seriesData.get(tokenCandleSeries);
-            if (d && d.open !== undefined) {
-                cmiPrice.textContent = `O ${fmtPrice(d.open)}  H ${fmtPrice(d.high)}  L ${fmtPrice(d.low)}  C ${fmtPrice(d.close)}`;
-            }
-        });
-
-        // Responsive
-        const ro = new ResizeObserver(() => {
-            if (tokenChart) tokenChart.applyOptions({
-                width: container.clientWidth || 800,
-                height: container.clientHeight || 420,
-            });
-        });
-        ro.observe(container);
+            updateInfoBar(best);
+        } catch (_) {}
     }
 
-    /** Format a price with dynamic decimals */
-    function fmtPrice(v) {
-        if (v == null || !isFinite(v)) return "—";
-        if (v === 0) return "0";
-        if (v >= 1)     return v.toFixed(2);
-        if (v >= 0.001) return v.toFixed(6);
-        return v.toFixed(12);
-    }
-
-    /** Fetch OHLCV data from DexScreener for a token */
-    async function fetchTokenChartData(token, pair) {
-        if (!tokenCandleSeries) return;
-
+    /**
+     * Load chart for a detected token.
+     * 1. Check DexScreener API for indexed pairs
+     * 2. If found → embed DexScreener with the real pair address
+     * 3. If not → try GeckoTerminal, else show "too new" message
+     */
+    async function fetchTokenChartData(token, pair, symbol) {
         const chain = chainSelect.value === "56" ? "bsc" : "ethereum";
-        const address = pair || token; // prefer pair address if available
 
         try {
-            // DexScreener pairs endpoint for basic info
-            const pairsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
-            let pairData = null;
-            let pairAddress = address;
+            // Ask DexScreener API if this token has any indexed pairs
+            const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
+            if (res.ok) {
+                const json = await res.json();
+                const pairs = (json.pairs || []).filter(p => p.chainId === chain);
 
-            if (pairsRes.ok) {
-                const pairsJson = await pairsRes.json();
-                if (pairsJson.pairs && pairsJson.pairs.length > 0) {
-                    // Pick the pair with highest liquidity on our chain
-                    const chainPairs = pairsJson.pairs.filter(p => p.chainId === chain);
-                    pairData = chainPairs.length > 0
-                        ? chainPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]
-                        : pairsJson.pairs[0];
-                    pairAddress = pairData.pairAddress || address;
+                if (pairs.length > 0) {
+                    // Use highest-liquidity pair
+                    const best = pairs.sort((a, b) =>
+                        (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+                    )[0];
 
-                    // Update info bar with real-time data
-                    const price = parseFloat(pairData.priceUsd) || 0;
-                    cmiPrice.textContent = `$${fmtPrice(price)}`;
+                    // Update info bar
+                    updateInfoBar(best);
 
-                    const change = pairData.priceChange?.h24 ?? null;
-                    if (change !== null) {
-                        const pct = parseFloat(change);
-                        cmiChange.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}% (24h)`;
-                        cmiChange.className = `cmi-change ${pct >= 0 ? "cmi-up" : "cmi-down"}`;
-                    }
-
-                    const vol = pairData.volume?.h24 || 0;
-                    cmiVol.textContent = vol > 0 ? `Vol: $${Number(vol).toLocaleString()}` : "";
-
-                    const liq = pairData.liquidity?.usd || 0;
-                    cmiLiq.textContent = liq > 0 ? `Liq: $${Number(liq).toLocaleString()}` : "";
-                }
-            }
-
-            // Fetch OHLCV candles from DexScreener
-            // DexScreener doesn't have a public candles API, so we build candles from price history
-            // We'll use the GeckoTerminal OHLCV API instead (free, no key needed)
-            const geckoChain = chainSelect.value === "56" ? "bsc" : "eth";
-            const tfMap = { "5m": "minute", "1h": "hour", "6h": "hour", "24h": "day" };
-            const aggrMap = { "5m": 5, "1h": 1, "6h": 1, "24h": 1 };
-            const limitMap = { "5m": 300, "1h": 168, "6h": 168, "24h": 90 };
-
-            const tf = tfMap[chartTimeframe] || "hour";
-            const aggr = aggrMap[chartTimeframe] || 1;
-            const limit = limitMap[chartTimeframe] || 100;
-
-            const ohlcvUrl = `https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools/${pairAddress}/ohlcv/${tf}?aggregate=${aggr}&limit=${limit}&currency=usd`;
-            const ohlcvRes = await fetch(ohlcvUrl, {
-                headers: { "Accept": "application/json" }
-            });
-
-            if (ohlcvRes.ok) {
-                const ohlcvJson = await ohlcvRes.json();
-                const ohlcvList = ohlcvJson.data?.attributes?.ohlcv_list || [];
-
-                if (ohlcvList.length === 0) {
-                    chartLoading.textContent = "No hay datos de precio disponibles aún";
-                    chartLoading.style.display = "flex";
+                    // Show DexScreener embed with the REAL pair address
+                    showDexScreenerEmbed(chain, best.pairAddress);
                     return;
                 }
+            }
+        } catch (_) {}
 
-                // GeckoTerminal OHLCV format: [timestamp, open, high, low, close, volume]
-                // Sorted newest first → reverse for chart
-                const candles = [];
-                const volumes = [];
-
-                const sorted = [...ohlcvList].reverse();
-                for (const kline of sorted) {
-                    const time = Math.floor(kline[0]);
-                    const o = parseFloat(kline[1]);
-                    const h = parseFloat(kline[2]);
-                    const l = parseFloat(kline[3]);
-                    const c = parseFloat(kline[4]);
-                    const v = parseFloat(kline[5]);
-
-                    candles.push({ time, open: o, high: h, low: l, close: c });
-                    volumes.push({
-                        time,
-                        value: v,
-                        color: c >= o ? "rgba(14,203,129,0.3)" : "rgba(246,70,93,0.3)"
-                    });
-                }
-
-                tokenCandleSeries.setData(candles);
-                tokenVolumeSeries.setData(volumes);
-                tokenChart.timeScale().fitContent();
-
-                // Update header price from last candle
-                if (candles.length > 0 && !pairData) {
-                    const last = candles[candles.length - 1];
-                    cmiPrice.textContent = `$${fmtPrice(last.close)}`;
-
-                    if (candles.length > 1) {
-                        const first = candles[0];
-                        const pctChange = ((last.close - first.open) / first.open) * 100;
-                        cmiChange.textContent = `${pctChange >= 0 ? "+" : ""}${pctChange.toFixed(2)}%`;
-                        cmiChange.className = `cmi-change ${pctChange >= 0 ? "cmi-up" : "cmi-down"}`;
+        // DexScreener doesn't have it — try GeckoTerminal
+        try {
+            const geckoChain = chain === "bsc" ? "bsc" : "eth";
+            const geckoRes = await fetch(
+                `https://api.geckoterminal.com/api/v2/networks/${geckoChain}/tokens/${token}/pools?page=1`,
+                { headers: { "Accept": "application/json" } }
+            );
+            if (geckoRes.ok) {
+                const geckoJson = await geckoRes.json();
+                const pools = geckoJson.data || [];
+                if (pools.length > 0) {
+                    const poolAddr = pools[0].attributes?.address || pools[0].id?.split("_").pop();
+                    if (poolAddr) {
+                        showGeckoTerminalEmbed(geckoChain, poolAddr);
+                        // Try to fill info bar from pool data
+                        try {
+                            const attrs = pools[0].attributes || {};
+                            const price = parseFloat(attrs.base_token_price_usd) || 0;
+                            if (price > 0) cmiPrice.textContent = `$${fmtPrice(price)}`;
+                            const vol = parseFloat(attrs.volume_usd?.h24) || 0;
+                            if (vol > 0) cmiVol.textContent = `Vol: $${Number(vol).toLocaleString()}`;
+                            const liq = parseFloat(attrs.reserve_in_usd) || 0;
+                            if (liq > 0) cmiLiq.textContent = `Liq: $${Number(liq).toLocaleString()}`;
+                        } catch (_) {}
+                        return;
                     }
                 }
-
-                chartLoading.style.display = "none";
-            } else {
-                chartLoading.textContent = "No se pudo cargar el gráfico. El par puede ser muy nuevo.";
-                chartLoading.style.display = "flex";
             }
+        } catch (_) {}
 
-        } catch (err) {
-            console.warn("Chart fetch error:", err);
-            chartLoading.textContent = "Error cargando datos del gráfico";
-            chartLoading.style.display = "flex";
+        // Neither has data — show "too new" fallback
+        showChartNoData(token, symbol);
+    }
+
+    /** Update the info bar from a DexScreener pair object */
+    function updateInfoBar(best) {
+        const price = parseFloat(best.priceUsd) || 0;
+        cmiPrice.textContent = `$${fmtPrice(price)}`;
+
+        const change = best.priceChange?.h24 ?? null;
+        if (change !== null) {
+            const pct = parseFloat(change);
+            cmiChange.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}% (24h)`;
+            cmiChange.className = `cmi-change ${pct >= 0 ? "cmi-up" : "cmi-down"}`;
         }
+
+        const vol = best.volume?.h24 || 0;
+        cmiVol.textContent = vol > 0 ? `Vol: $${Number(vol).toLocaleString()}` : "";
+
+        const liq = best.liquidity?.usd || 0;
+        cmiLiq.textContent = liq > 0 ? `Liq: $${Number(liq).toLocaleString()}` : "";
     }
 
     /** Close the chart modal */
@@ -890,12 +870,13 @@
         clearInterval(chartRefreshTimer);
         chartRefreshTimer = null;
         chartCurrentToken = null;
-        if (tokenChart) {
-            tokenChart.remove();
-            tokenChart = null;
-            tokenCandleSeries = null;
-            tokenVolumeSeries = null;
-        }
+
+        // Remove DexScreener/GeckoTerminal iframe
+        const iframe = chartModalContainer.querySelector(".dex-embed-iframe");
+        if (iframe) iframe.remove();
+        // Remove 'no data' fallback
+        const noData = chartModalContainer.querySelector(".chart-no-data");
+        if (noData) noData.remove();
     }
 
     // ─── Snipes table ───────────────────────────────────
@@ -960,20 +941,7 @@
         if (e.target === chartModal) closeTokenChart();
     });
 
-    // Chart timeframe buttons
-    document.querySelectorAll(".chart-tf-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-            document.querySelectorAll(".chart-tf-btn").forEach(b => b.classList.remove("active"));
-            btn.classList.add("active");
-            chartTimeframe = btn.dataset.tf;
-            if (chartCurrentToken) {
-                chartLoading.textContent = "Cargando gráfico…";
-                chartLoading.style.display = "flex";
-                buildTokenChart();
-                fetchTokenChartData(chartCurrentToken.token, chartCurrentToken.pair);
-            }
-        });
-    });
+
 
     // ─── Legend toggle ─────────────────────────────────
     const btnLegend = document.getElementById("btn-toggle-legend");

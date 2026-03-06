@@ -2190,6 +2190,78 @@ body.resizing-col *, body.resizing-row * {
     pointer-events: none;
 }
 
+/* DexScreener / GeckoTerminal embed iframe */
+.dex-embed-iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+}
+.chart-mode-label {
+    font-size: .7em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    letter-spacing: .02em;
+}
+.chart-mode-binance {
+    background: rgba(240,185,11,.12);
+    color: #f0b90b;
+    border: 1px solid rgba(240,185,11,.2);
+}
+.chart-mode-dex {
+    background: rgba(14,203,129,.12);
+    color: #0ecb81;
+    border: 1px solid rgba(14,203,129,.2);
+}
+
+/* Chart "no data" fallback */
+.chart-no-data {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #848E9C;
+    padding: 2em;
+    background: #0b0e13;
+    z-index: 5;
+}
+.chart-no-data-icon {
+    font-size: 3em;
+    margin-bottom: .3em;
+}
+.chart-no-data-title {
+    font-size: 1.2em;
+    font-weight: 700;
+    color: #f0b90b;
+    margin-bottom: .5em;
+}
+.chart-no-data-desc {
+    font-size: .9em;
+    line-height: 1.6;
+    max-width: 360px;
+    margin-bottom: 1em;
+    color: #6c7284;
+}
+.btn-retry-chart {
+    background: rgba(240,185,11,.12);
+    color: #f0b90b;
+    border: 1px solid rgba(240,185,11,.25);
+    padding: 8px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: .95em;
+    transition: background .2s;
+}
+.btn-retry-chart:hover {
+    background: rgba(240,185,11,.25);
+}
+
 /* Chart button in table */
 .btn-view-chart {
     background: rgba(240,185,11,.08) !important;
