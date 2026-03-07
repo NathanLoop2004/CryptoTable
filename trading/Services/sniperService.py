@@ -169,6 +169,17 @@ class TokenInfo:
     has_website: bool = False
     tokensniffer_score: int = -1        # 0–100, -1 = no data
     tokensniffer_is_scam: bool = False
+    # ── LP Lock info (from GoPlus) ──
+    lp_locked: bool = False
+    lp_lock_percent: float = 0          # % of LP tokens locked
+    lp_lock_hours_remaining: float = 0  # hours until lock expires
+    lp_lock_end_timestamp: float = 0    # unix timestamp
+    lp_lock_source: str = ""            # eg PinkLock, Unicrypt
+    # ── Price history (DexScreener) ──
+    dexscreener_price_change_m5: float = 0
+    dexscreener_price_change_h1: float = 0
+    dexscreener_price_change_h6: float = 0
+    dexscreener_price_change_h24: float = 0
     # API tracking — did we actually get data?
     _goplus_ok: bool = False
     _honeypot_ok: bool = False
@@ -221,6 +232,7 @@ class ActiveSnipe:
     status: str = "active"       # active | sold | stopped
     sell_tx: str = ""
     timestamp: float = 0
+    max_hold_hours: float = 0       # 0 = disabled
 
     def to_dict(self):
         return asdict(self)
@@ -403,6 +415,55 @@ class ContractAnalyzer:
 
             info.creator_address = result.get("creator_address", "")
 
+            # ── LP Lock detection ──
+            lp_holders = result.get("lp_holders", [])
+            total_lp_locked_pct = 0
+            best_lock_end = 0
+            lock_source = ""
+            for lp in lp_holders:
+                is_locked = str(lp.get("is_locked", "0")) == "1"
+                if is_locked:
+                    try:
+                        pct = float(lp.get("percent", 0)) * 100
+                        total_lp_locked_pct += pct
+                    except (ValueError, TypeError):
+                        pass
+                    locked_details = lp.get("locked_detail", [])
+                    for detail in locked_details:
+                        try:
+                            end_ts = float(detail.get("end_time", 0))
+                            if end_ts > best_lock_end:
+                                best_lock_end = end_ts
+                        except (ValueError, TypeError):
+                            pass
+                    # Common lock contracts
+                    lp_addr = lp.get("address", "").lower()
+                    tag = lp.get("tag", "")
+                    if tag:
+                        lock_source = tag
+                    elif "pink" in lp_addr:
+                        lock_source = "PinkLock"
+                    elif "unicrypt" in lp_addr:
+                        lock_source = "Unicrypt"
+                    elif "team.finance" in lp_addr or "teamfinance" in lp_addr:
+                        lock_source = "Team.Finance"
+
+            if total_lp_locked_pct > 0:
+                info.lp_locked = True
+                info.lp_lock_percent = round(total_lp_locked_pct, 1)
+                info.lp_lock_source = lock_source
+                if best_lock_end > 0:
+                    info.lp_lock_end_timestamp = best_lock_end
+                    remaining_h = max(0, (best_lock_end - time.time()) / 3600)
+                    info.lp_lock_hours_remaining = round(remaining_h, 1)
+                    info.risk_reasons.append(f"🔒 LP Locked {info.lp_lock_percent}% — {info.lp_lock_hours_remaining}h restantes")
+                    if lock_source:
+                        info.risk_reasons.append(f"🔐 Lock via: {lock_source}")
+                else:
+                    info.risk_reasons.append(f"🔒 LP Locked {info.lp_lock_percent}% (sin fecha de expiración)")
+            else:
+                info.risk_reasons.append("⚠️ Liquidez NO bloqueada — riesgo de rug pull")
+
             # ── Build risk_reasons from flags ──
             if not info.is_open_source:
                 info.risk_reasons.append("🔒 Código no verificado (no open source)")
@@ -482,6 +543,25 @@ class ContractAnalyzer:
             info.has_social_links = len(socials) > 0
             info.has_website = len(websites) > 0
 
+            # ── Price change history ──
+            pc = best.get("priceChange", {})
+            try:
+                info.dexscreener_price_change_m5 = float(pc.get("m5", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+            try:
+                info.dexscreener_price_change_h1 = float(pc.get("h1", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+            try:
+                info.dexscreener_price_change_h6 = float(pc.get("h6", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+            try:
+                info.dexscreener_price_change_h24 = float(pc.get("h24", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+
             # ── DexScreener-based risk signals ──
             if info.dexscreener_age_hours < 1:
                 info.risk_reasons.append("🔜 Par creado hace menos de 1 hora")
@@ -490,6 +570,16 @@ class ContractAnalyzer:
             total_txns = info.dexscreener_buys_24h + info.dexscreener_sells_24h
             if total_txns < 5:
                 info.risk_reasons.append(f"👥 Muy pocas transacciones ({total_txns} en 24h)")
+
+            # ── Price dump detection ──
+            if info.dexscreener_price_change_h24 <= -50:
+                info.risk_reasons.append(f"📉 Caída 24h: {info.dexscreener_price_change_h24:.0f}% — posible dump")
+            elif info.dexscreener_price_change_h24 <= -30:
+                info.risk_reasons.append(f"📉 Caída 24h: {info.dexscreener_price_change_h24:.0f}%")
+            if info.dexscreener_price_change_h6 <= -40:
+                info.risk_reasons.append(f"📉 Caída 6h: {info.dexscreener_price_change_h6:.0f}%")
+            if info.dexscreener_price_change_h1 <= -25:
+                info.risk_reasons.append(f"📉 Caída 1h: {info.dexscreener_price_change_h1:.0f}%")
 
             logger.info(f"DexScreener for {info.symbol}: {info.dexscreener_pairs} pairs, ${info.dexscreener_volume_24h:.0f} vol")
 
@@ -562,6 +652,71 @@ class ContractAnalyzer:
 
         except Exception as e:
             logger.debug(f"TokenSniffer API failed for {info.address}: {e}")
+
+    def _rebuild_flag_reasons(self, info: TokenInfo) -> list[str]:
+        """Rebuild descriptive risk reasons from stored security flags.
+
+        Used during periodic refresh so GoPlus / honeypot.is reasons
+        are regenerated without re-calling those APIs.
+        """
+        reasons: list[str] = []
+
+        # ── From honeypot.is flags ──
+        if info.is_honeypot:
+            reasons.append("🍯 HONEYPOT — no puedes vender")
+        if info.buy_tax > 10:
+            reasons.append(f"💸 Buy tax alto: {info.buy_tax}%")
+        if info.sell_tax > 10:
+            reasons.append(f"💸 Sell tax alto: {info.sell_tax}%")
+
+        # ── From GoPlus flags ──
+        if info._goplus_ok:
+            if not info.is_open_source:
+                reasons.append("🔒 Código no verificado (no open source)")
+            if info.is_proxy:
+                reasons.append("🔄 Contrato proxy — puede cambiar la lógica")
+            if info.is_mintable:
+                reasons.append("🖨️ Owner puede crear más tokens (mint)")
+            if info.has_blacklist:
+                reasons.append("🚫 Puede bloquear wallets (blacklist)")
+            if info.can_pause_trading:
+                reasons.append("⏸️ Puede pausar el trading")
+            if info.has_hidden_owner:
+                reasons.append("👤 Owner oculto")
+            if info.can_self_destruct:
+                reasons.append("💣 Contrato puede autodestruirse")
+            if info.has_external_call:
+                reasons.append("📡 Llamadas externas (puede cambiar comportamiento)")
+            if info.cannot_sell_all:
+                reasons.append("🔐 No puedes vender todos tus tokens")
+            if info.owner_can_change_balance:
+                reasons.append("⚠️ Owner puede modificar balances")
+            if info.has_trading_cooldown:
+                reasons.append("⏳ Cooldown entre trades")
+            if info.personal_slippage_modifiable:
+                reasons.append("📊 Slippage modificable por el owner")
+
+        # ── From TokenSniffer flags ──
+        if info._tokensniffer_ok:
+            if info.tokensniffer_is_scam:
+                reasons.append("🚨 TokenSniffer flagged as SCAM")
+            elif info.tokensniffer_score != -1 and info.tokensniffer_score < 50:
+                reasons.append(f"⚠️ TokenSniffer score bajo: {info.tokensniffer_score}/100")
+
+        # ── LP Lock status ──
+        if info._goplus_ok:
+            if info.lp_locked:
+                # Recalculate remaining hours from stored end_timestamp
+                if info.lp_lock_end_timestamp > 0:
+                    remaining_h = max(0, (info.lp_lock_end_timestamp - time.time()) / 3600)
+                    info.lp_lock_hours_remaining = round(remaining_h, 1)
+                reasons.append(f"🔒 LP Locked {info.lp_lock_percent}% — {info.lp_lock_hours_remaining}h restantes")
+                if info.lp_lock_source:
+                    reasons.append(f"🔐 Lock via: {info.lp_lock_source}")
+            else:
+                reasons.append("⚠️ Liquidez NO bloqueada — riesgo de rug pull")
+
+        return reasons
 
     def _calculate_risk(self, info: TokenInfo):
         """Calculate overall risk level based on ALL collected data."""
@@ -660,6 +815,7 @@ class SniperBot:
             "auto_buy": False,           # auto-execute buys
             "only_safe": True,           # only buy "safe" risk tokens
             "slippage": 12,              # %
+            "max_hold_hours": 0,         # 0 = disabled; sell after N hours
             # ── Concurrency / Performance ──
             "max_concurrent": 5,         # parallel pair analyses
             "block_range": 5,            # blocks per scan cycle
@@ -788,6 +944,158 @@ class SniperBot:
         except Exception:
             return 0
 
+    # ─── Build token event payload ──────────────────────────
+    def _build_token_event_data(self, token: str, pair: str, info: 'TokenInfo',
+                                 native_liq: float, usd_liq: float,
+                                 has_liquidity: bool, block: int) -> dict:
+        """Build the full data dict for token_detected / token_updated events."""
+        return {
+            "token": token,
+            "pair": pair,
+            "symbol": info.symbol,
+            "name": info.name,
+            "risk": info.risk,
+            "buy_tax": info.buy_tax,
+            "sell_tax": info.sell_tax,
+            "is_honeypot": info.is_honeypot,
+            "has_owner": info.has_owner,
+            "risk_reasons": list(info.risk_reasons),
+            "liquidity_usd": round(usd_liq, 2),
+            "liquidity_native": round(native_liq, 4),
+            "has_liquidity": has_liquidity,
+            "block": block,
+            # Security flags
+            "is_mintable": info.is_mintable,
+            "has_blacklist": info.has_blacklist,
+            "can_pause_trading": info.can_pause_trading,
+            "is_proxy": info.is_proxy,
+            "has_hidden_owner": info.has_hidden_owner,
+            "can_self_destruct": info.can_self_destruct,
+            "cannot_sell_all": info.cannot_sell_all,
+            "owner_can_change_balance": info.owner_can_change_balance,
+            "is_open_source": info.is_open_source,
+            "holder_count": info.holder_count,
+            "total_supply": info.total_supply,
+            # Cross-platform data
+            "listed_coingecko": info.listed_coingecko,
+            "coingecko_id": info.coingecko_id,
+            "dexscreener_pairs": info.dexscreener_pairs,
+            "dexscreener_volume_24h": info.dexscreener_volume_24h,
+            "dexscreener_liquidity": info.dexscreener_liquidity,
+            "dexscreener_buys_24h": info.dexscreener_buys_24h,
+            "dexscreener_sells_24h": info.dexscreener_sells_24h,
+            "dexscreener_age_hours": info.dexscreener_age_hours,
+            "has_social_links": info.has_social_links,
+            "has_website": info.has_website,
+            "tokensniffer_score": info.tokensniffer_score,
+            "tokensniffer_is_scam": info.tokensniffer_is_scam,
+            # API status
+            "goplus_ok": info._goplus_ok,
+            "honeypot_ok": info._honeypot_ok,
+            "dexscreener_ok": info._dexscreener_ok,
+            "coingecko_ok": info._coingecko_ok,
+            "tokensniffer_ok": info._tokensniffer_ok,
+            # LP Lock
+            "lp_locked": info.lp_locked,
+            "lp_lock_percent": info.lp_lock_percent,
+            "lp_lock_hours_remaining": info.lp_lock_hours_remaining,
+            "lp_lock_source": info.lp_lock_source,
+            # Price history
+            "price_change_m5": info.dexscreener_price_change_m5,
+            "price_change_h1": info.dexscreener_price_change_h1,
+            "price_change_h6": info.dexscreener_price_change_h6,
+            "price_change_h24": info.dexscreener_price_change_h24,
+        }
+
+    # ─── Refresh detected tokens (periodic re-check) ───────
+    async def _refresh_detected_tokens(self):
+        """Re-check liquidity and DexScreener data for recently detected tokens.
+        Emits 'token_updated' for any token whose data changed."""
+        # Only refresh the last 20 detected pairs (most recent, most relevant)
+        candidates = self.detected_pairs[-20:]
+        if not candidates:
+            return
+
+        # Limit concurrent refreshes
+        sem = asyncio.Semaphore(3)
+
+        async def _refresh_one(pair: 'NewPair'):
+            async with sem:
+                try:
+                    token = pair.new_token
+                    pair_addr = pair.pair_address
+
+                    # Re-check liquidity
+                    native_liq, usd_liq = await self._get_pair_liquidity(pair_addr)
+
+                    # Re-check DexScreener (lightweight, fast)
+                    info = pair.token_info
+                    if info:
+                        await self.analyzer._check_dexscreener_api(info)
+
+                    old_liq = pair.liquidity_usd
+                    pair.liquidity_native = native_liq
+                    pair.liquidity_usd = usd_liq
+
+                    has_liquidity = usd_liq >= self.settings["min_liquidity_usd"]
+
+                    if info:
+                        # Rebuild reasons from stored flags + fresh DexScreener data
+                        info.risk_reasons = self.analyzer._rebuild_flag_reasons(info)
+                        self.analyzer._calculate_risk(info)
+
+                        event_data = self._build_token_event_data(
+                            token, pair_addr, info,
+                            native_liq, usd_liq, has_liquidity,
+                            pair.block_number,
+                        )
+                        await self._emit("token_updated", event_data)
+
+                        # If liquidity just appeared and token passes safety, emit opportunity
+                        if has_liquidity and old_liq < self.settings["min_liquidity_usd"]:
+                            passes = True
+                            if self.settings["only_safe"] and info.risk == "danger":
+                                passes = False
+                            if info.buy_tax > self.settings["max_buy_tax"]:
+                                passes = False
+                            if info.sell_tax > self.settings["max_sell_tax"]:
+                                passes = False
+                            if info.is_honeypot:
+                                passes = False
+                            # LP must be locked
+                            if not info.lp_locked:
+                                passes = False
+                            # Price history: reject severe dumps
+                            if info._dexscreener_ok:
+                                if info.dexscreener_price_change_h24 <= -50:
+                                    passes = False
+                                if info.dexscreener_price_change_h6 <= -40:
+                                    passes = False
+                                if info.dexscreener_price_change_h1 <= -25:
+                                    passes = False
+                            if passes:
+                                auto_hold_h = 0
+                                if info.lp_lock_hours_remaining > 1:
+                                    auto_hold_h = round(info.lp_lock_hours_remaining - 1, 1)
+                                await self._emit("snipe_opportunity", {
+                                    "token": token,
+                                    "symbol": info.symbol,
+                                    "name": info.name,
+                                    "risk": info.risk,
+                                    "liquidity_usd": round(usd_liq, 2),
+                                    "pair": pair_addr,
+                                    "auto_buy": self.settings["auto_buy"],
+                                    "lp_locked": info.lp_locked,
+                                    "lp_lock_hours": info.lp_lock_hours_remaining,
+                                    "lp_lock_percent": info.lp_lock_percent,
+                                    "auto_hold_hours": auto_hold_h,
+                                })
+                except Exception as e:
+                    logger.debug(f"Refresh token failed: {e}")
+
+        tasks = [_refresh_one(p) for p in candidates]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     # ─── New pair handler ───────────────────────────────────
     async def _handle_new_pair(self, pair_address: str, token0: str, token1: str, block: int):
         """Process a newly detected pair (runs under semaphore)."""
@@ -845,53 +1153,9 @@ class SniperBot:
         })
 
         # Emit token_detected for ALL tokens (liquid or not) so frontend can show them
-        await self._emit("token_detected", {
-            "token": new_token,
-            "pair": pair_address,
-            "symbol": token_info.symbol,
-            "name": token_info.name,
-            "risk": token_info.risk,
-            "buy_tax": token_info.buy_tax,
-            "sell_tax": token_info.sell_tax,
-            "is_honeypot": token_info.is_honeypot,
-            "has_owner": token_info.has_owner,
-            "risk_reasons": token_info.risk_reasons,
-            "liquidity_usd": round(usd_liq, 2),
-            "liquidity_native": round(native_liq, 4),
-            "has_liquidity": has_liquidity,
-            "block": block,
-            # Security flags
-            "is_mintable": token_info.is_mintable,
-            "has_blacklist": token_info.has_blacklist,
-            "can_pause_trading": token_info.can_pause_trading,
-            "is_proxy": token_info.is_proxy,
-            "has_hidden_owner": token_info.has_hidden_owner,
-            "can_self_destruct": token_info.can_self_destruct,
-            "cannot_sell_all": token_info.cannot_sell_all,
-            "owner_can_change_balance": token_info.owner_can_change_balance,
-            "is_open_source": token_info.is_open_source,
-            "holder_count": token_info.holder_count,
-            "total_supply": token_info.total_supply,
-            # Cross-platform data
-            "listed_coingecko": token_info.listed_coingecko,
-            "coingecko_id": token_info.coingecko_id,
-            "dexscreener_pairs": token_info.dexscreener_pairs,
-            "dexscreener_volume_24h": token_info.dexscreener_volume_24h,
-            "dexscreener_liquidity": token_info.dexscreener_liquidity,
-            "dexscreener_buys_24h": token_info.dexscreener_buys_24h,
-            "dexscreener_sells_24h": token_info.dexscreener_sells_24h,
-            "dexscreener_age_hours": token_info.dexscreener_age_hours,
-            "has_social_links": token_info.has_social_links,
-            "has_website": token_info.has_website,
-            "tokensniffer_score": token_info.tokensniffer_score,
-            "tokensniffer_is_scam": token_info.tokensniffer_is_scam,
-            # API status
-            "goplus_ok": token_info._goplus_ok,
-            "honeypot_ok": token_info._honeypot_ok,
-            "dexscreener_ok": token_info._dexscreener_ok,
-            "coingecko_ok": token_info._coingecko_ok,
-            "tokensniffer_ok": token_info._tokensniffer_ok,
-        })
+        await self._emit("token_detected",
+            self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
+        )
 
         self.detected_pairs.append(new_pair)
         if len(self.detected_pairs) > 200:
@@ -925,7 +1189,29 @@ class SniperBot:
         if token_info.is_honeypot:
             passes_safety = False
 
+        # LP must be locked to buy
+        if not token_info.lp_locked:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: LP not locked")
+
+        # Price history check: reject tokens with severe dumps
+        if token_info._dexscreener_ok:
+            if token_info.dexscreener_price_change_h24 <= -50:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: 24h dump {token_info.dexscreener_price_change_h24}%")
+            if token_info.dexscreener_price_change_h6 <= -40:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: 6h dump {token_info.dexscreener_price_change_h6}%")
+            if token_info.dexscreener_price_change_h1 <= -25:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: 1h dump {token_info.dexscreener_price_change_h1}%")
+
         if passes_safety:
+            # Auto-calculate max_hold from LP lock duration (sell 1h before expiry)
+            auto_hold_h = 0
+            if token_info.lp_lock_hours_remaining > 1:
+                auto_hold_h = round(token_info.lp_lock_hours_remaining - 1, 1)
+
             await self._emit("snipe_opportunity", {
                 "token": new_token,
                 "symbol": token_info.symbol,
@@ -934,6 +1220,10 @@ class SniperBot:
                 "liquidity_usd": round(usd_liq, 2),
                 "pair": pair_address,
                 "auto_buy": self.settings["auto_buy"],
+                "lp_locked": token_info.lp_locked,
+                "lp_lock_hours": token_info.lp_lock_hours_remaining,
+                "lp_lock_percent": token_info.lp_lock_percent,
+                "auto_hold_hours": auto_hold_h,
             })
 
     # ─── Main polling loop ──────────────────────────────────
@@ -986,6 +1276,7 @@ class SniperBot:
             "message": f"Starting from block #{last_block:,}",
         })
         price_tick = 0
+        refresh_tick = 0          # counter for detected-token refresh cycle
         total_blocks_scanned = 0
         total_events_found = 0
 
@@ -1083,6 +1374,12 @@ class SniperBot:
                     # Update active snipes P&L
                     await self._update_active_snipes()
 
+                # Refresh detected tokens every ~20 seconds (13 ticks × 1.5s)
+                refresh_tick += 1
+                if refresh_tick >= 13:
+                    refresh_tick = 0
+                    await self._refresh_detected_tokens()
+
                 # Emit heartbeat
                 await self._emit("heartbeat", {
                     "block": current_block,
@@ -1109,7 +1406,7 @@ class SniperBot:
     async def _update_active_snipes(self):
         """Update P&L for all active positions."""
         for snipe in self.active_snipes:
-            if snipe.status != "active":
+            if snipe.status not in ("active", "selling"):
                 continue
             try:
                 current_price = await self._get_token_price_usd(snipe.token_address)
@@ -1117,6 +1414,7 @@ class SniperBot:
                     snipe.current_price_usd = current_price
                     snipe.pnl_percent = ((current_price - snipe.buy_price_usd) / snipe.buy_price_usd) * 100
 
+                    held_seconds = time.time() - snipe.timestamp if snipe.timestamp else 0
                     await self._emit("snipe_update", {
                         "token": snipe.token_address,
                         "symbol": snipe.symbol,
@@ -1124,10 +1422,14 @@ class SniperBot:
                         "buy_price": snipe.buy_price_usd,
                         "current_price": current_price,
                         "status": snipe.status,
+                        "timestamp": snipe.timestamp,
+                        "max_hold_hours": snipe.max_hold_hours,
+                        "held_seconds": round(held_seconds),
                     })
 
-                    # Auto take-profit / stop-loss alerts
+                    # Auto take-profit / stop-loss alerts (only fire ONCE, then mark as "selling")
                     if snipe.pnl_percent >= snipe.take_profit:
+                        snipe.status = "selling"
                         await self._emit("take_profit_alert", {
                             "token": snipe.token_address,
                             "symbol": snipe.symbol,
@@ -1135,11 +1437,25 @@ class SniperBot:
                             "target": snipe.take_profit,
                         })
                     elif snipe.pnl_percent <= -snipe.stop_loss:
+                        snipe.status = "selling"
                         await self._emit("stop_loss_alert", {
                             "token": snipe.token_address,
                             "symbol": snipe.symbol,
                             "pnl_percent": round(snipe.pnl_percent, 2),
                             "target": -snipe.stop_loss,
+                        })
+
+                # ── Time-limit auto-sell ──
+                if snipe.status == "active" and snipe.max_hold_hours > 0 and snipe.timestamp > 0:
+                    held_h = (time.time() - snipe.timestamp) / 3600
+                    if held_h >= snipe.max_hold_hours:
+                        snipe.status = "selling"
+                        await self._emit("time_limit_alert", {
+                            "token": snipe.token_address,
+                            "symbol": snipe.symbol,
+                            "pnl_percent": round(snipe.pnl_percent, 2),
+                            "held_hours": round(held_h, 2),
+                            "max_hold_hours": snipe.max_hold_hours,
                         })
             except Exception:
                 pass
@@ -1177,8 +1493,10 @@ class SniperBot:
             "recent_events": self.events_log[-30:],
         }
 
-    def add_manual_snipe(self, token_address: str, symbol: str, buy_price: float, amount_native: float, tx_hash: str):
+    def add_manual_snipe(self, token_address: str, symbol: str, buy_price: float, amount_native: float, tx_hash: str, auto_hold_hours: float = 0):
         """Register a position bought from the frontend (user executed the swap)."""
+        # Use auto_hold_hours from LP lock detection if available; fallback to manual setting
+        hold_hours = auto_hold_hours if auto_hold_hours > 0 else float(self.settings.get("max_hold_hours", 0))
         snipe = ActiveSnipe(
             token_address=token_address,
             symbol=symbol,
@@ -1190,6 +1508,16 @@ class SniperBot:
             take_profit=self.settings["take_profit"],
             stop_loss=self.settings["stop_loss"],
             timestamp=time.time(),
+            max_hold_hours=hold_hours,
         )
         self.active_snipes.append(snipe)
         return snipe.to_dict()
+
+    def mark_snipe_sold(self, token_address: str, sell_tx: str = "") -> dict | None:
+        """Mark an active position as sold (triggered from frontend after swap)."""
+        for snipe in self.active_snipes:
+            if snipe.token_address.lower() == token_address.lower() and snipe.status == "active":
+                snipe.status = "sold"
+                snipe.sell_tx = sell_tx
+                return snipe.to_dict()
+        return None

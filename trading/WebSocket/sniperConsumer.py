@@ -77,8 +77,21 @@ class SniperConsumer(AsyncWebsocketConsumer):
                     buy_price=float(msg.get("buy_price", 0)),
                     amount_native=float(msg.get("amount", 0)),
                     tx_hash=msg.get("tx", ""),
+                    auto_hold_hours=float(msg.get("auto_hold_hours", 0)),
                 )
                 await self._send_event("snipe_registered", snipe)
+            else:
+                await self._send_event("error", {"message": "Bot not running"})
+
+        elif action == "mark_snipe_sold":
+            if self.bot:
+                token_addr = msg.get("token", "")
+                sell_tx    = msg.get("sell_tx", "")
+                sold = self.bot.mark_snipe_sold(token_addr, sell_tx)
+                if sold:
+                    await self._send_event("snipe_sold", sold)
+                else:
+                    await self._send_event("error", {"message": "Position not found"})
             else:
                 await self._send_event("error", {"message": "Bot not running"})
 

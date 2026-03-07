@@ -8,31 +8,81 @@
     "use strict";
 
     /* ═══════════════════════════════════════════════════════════════
-     *  Wallet (from walletConnect.js)
+     *  Wallet + TxModule (ethers.js)
      * ═══════════════════════════════════════════════════════════════ */
     const wallet = window.__walletState || { address: "", chain_id: 56 };
+    let _rawWalletProvider = null;
+    let ethersProvider     = null;
+    let ethersSigner       = null;
+    let _txReady           = false;   // true once TxModule.init() succeeds
 
-    async function reconnectWallet() {
-        if (typeof window.reconnectWallet === "function") {
-            return window.reconnectWallet();
+    /** Detect injected wallet (Trust Wallet / MetaMask / generic). */
+    function getRawProvider() {
+        if (_rawWalletProvider) return _rawWalletProvider;
+        let raw = null;
+        if (wallet.provider === "Trust Wallet" || wallet.provider === "trust_wallet") {
+            raw = window.trustwallet ||
+                  (window.ethereum && window.ethereum.isTrust && window.ethereum) || null;
         }
-        const prov = window.trustwallet?.ethereum || window.ethereum;
-        if (!prov) return false;
+        if (!raw && (wallet.provider === "MetaMask" || wallet.provider === "metamask")) {
+            if (window.ethereum && window.ethereum.providers)
+                raw = window.ethereum.providers.find(p => p.isMetaMask) || null;
+            if (!raw && window.ethereum && window.ethereum.isMetaMask)
+                raw = window.ethereum;
+        }
+        if (!raw && window.ethereum) raw = window.ethereum;
+        _rawWalletProvider = raw;
+        return raw;
+    }
+
+    /** Rebuild ethers provider + signer and initialize TxModule. */
+    async function reconnectWallet() {
         try {
-            const accs = await prov.request({ method: "eth_accounts" });
-            if (accs.length) {
-                wallet.address = accs[0];
-                const cid = await prov.request({ method: "eth_chainId" });
-                wallet.chain_id = parseInt(cid, 16);
-                window.__walletState = wallet;
-                return true;
+            const raw = getRawProvider();
+            if (!raw) {
+                console.warn("Sniper: No injected wallet — auto-buy disabled.");
+                return false;
             }
-        } catch (_) {}
-        return false;
+            ethersProvider = new ethers.BrowserProvider(raw);
+            await ethersProvider.send("eth_requestAccounts", []);
+            ethersSigner = await ethersProvider.getSigner();
+            const addr   = await ethersSigner.getAddress();
+
+            wallet.address  = addr;
+            const cid       = await raw.request({ method: "eth_chainId" });
+            wallet.chain_id = parseInt(cid, 16);
+            window.__walletState = wallet;
+
+            // Initialize TxModule for on-chain swaps
+            if (typeof TxModule !== "undefined") {
+                TxModule.init({
+                    signer:   ethersSigner,
+                    provider: ethersProvider,
+                    address:  wallet.address,
+                    chainId:  wallet.chain_id,
+                    onLog:    (msg) => addFeed(`🔗 ${msg}`, "system"),
+                });
+                _txReady = true;
+                console.log("Sniper: TxModule ready —", addr);
+            } else {
+                console.warn("Sniper: TxModule not found — swaps disabled.");
+            }
+            return true;
+        } catch (err) {
+            console.error("Sniper: wallet reconnect failed:", err);
+            return false;
+        }
     }
 
     function shortAddr(a) {
         return a ? a.slice(0, 6) + "…" + a.slice(-4) : "Not connected";
+    }
+
+    /** Ensure TxModule is ready; try a one-time reconnect if not. */
+    async function ensureTxReady() {
+        if (_txReady) return true;
+        const ok = await reconnectWallet();
+        return ok && _txReady;
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -79,6 +129,7 @@
     const setSlippage    = $("set-slippage");
     const setOnlySafe    = $("set-only-safe");
     const setAutoBuy     = $("set-auto-buy");
+    const setMaxHold     = $("set-max-hold");
     const btnSaveSettings = $("btn-save-settings");
 
     // Performance settings
@@ -109,6 +160,12 @@
     const cmiLiq            = $("cmi-liq");
     const btnCloseChartModal = $("btn-close-chart-modal");
 
+    // Log modal
+    const logModal          = $("log-modal");
+    const logModalTitle     = $("log-modal-title");
+    const logModalBody      = $("log-modal-body");
+    const btnCloseLogModal  = $("btn-close-log-modal");
+
     /* ═══════════════════════════════════════════════════════════════
      *  State
      * ═══════════════════════════════════════════════════════════════ */
@@ -122,6 +179,10 @@
     // Chart state
     let chartCurrentToken = null;  // {token, symbol, pair}
     let chartRefreshTimer = null;
+
+    // Log modal state
+    let _logModalAddr = null;      // token address currently shown in log modal
+    let _logAutoFollow = true;     // auto-update modal with each new token_detected
 
     // Pipeline counters
     let pipeStats = {
@@ -142,11 +203,181 @@
         line.textContent = `[${ts}] ${text}`;
         feedDiv.appendChild(line);
 
-        // Keep max 200 lines
-        while (feedDiv.children.length > 200) {
+        // Keep max 500 lines
+        while (feedDiv.children.length > 500) {
             feedDiv.removeChild(feedDiv.firstChild);
         }
         feedDiv.scrollTop = feedDiv.scrollHeight;
+    }
+
+    /** Like addFeed but allows HTML (for clickable TX links). */
+    function addFeedHTML(html, type = "info") {
+        const line = document.createElement("div");
+        line.className = `feed-line feed-${type}`;
+        const ts = new Date().toLocaleTimeString();
+        line.innerHTML = `[${ts}] ${html}`;
+        feedDiv.appendChild(line);
+        while (feedDiv.children.length > 500) {
+            feedDiv.removeChild(feedDiv.firstChild);
+        }
+        feedDiv.scrollTop = feedDiv.scrollHeight;
+    }
+
+    /** Get block explorer base URL for current chain. */
+    function _explorerBase() {
+        const cid = wallet.chain_id || parseInt(chainSelect.value) || 56;
+        return cid === 56  ? "https://bscscan.com"
+             : cid === 1   ? "https://etherscan.io"
+             : cid === 137  ? "https://polygonscan.com"
+             : cid === 42161 ? "https://arbiscan.io"
+             :                 "https://bscscan.com";
+    }
+    function explorerTxUrl(txHash) { return `${_explorerBase()}/tx/${txHash}`; }
+    function explorerTokenUrl(addr) { return `${_explorerBase()}/token/${addr}`; }
+    function explorerAddrUrl(addr)  { return `${_explorerBase()}/address/${addr}`; }
+
+    function nativeSymbol() {
+        const cid = wallet.chain_id || parseInt(chainSelect.value) || 56;
+        return cid === 56 ? "BNB" : cid === 1 ? "ETH" : cid === 137 ? "MATIC" : cid === 42161 ? "ETH" : "Native";
+    }
+
+    function dexScreenerUrl(token) {
+        const cid = wallet.chain_id || parseInt(chainSelect.value) || 56;
+        const chain = cid === 56 ? "bsc" : cid === 1 ? "ethereum" : cid === 137 ? "polygon" : "bsc";
+        return `https://dexscreener.com/${chain}/${token}`;
+    }
+
+    function coinMarketCapUrl(token) {
+        const cid = wallet.chain_id || parseInt(chainSelect.value) || 56;
+        const chain = cid === 56 ? "bsc" : cid === 1 ? "ethereum" : cid === 137 ? "polygon-pos" : "bsc";
+        return `https://coinmarketcap.com/dexscan/${chain}/${token}`;
+    }
+
+    /**
+     * Build a full HTML log card for a detected token.
+     * Shows ALL analysis data in a compact formatted block.
+     */
+    function buildTokenLogCard(data) {
+        const rIcon = data.risk === "safe" ? "🟢" : data.risk === "warning" ? "🟡" : data.risk === "danger" ? "🔴" : "⚪";
+        const liqStr = data.liquidity_usd > 0 ? `$${Number(data.liquidity_usd).toLocaleString()}` : "$0";
+        const liqNative = data.liquidity_native > 0 ? `${data.liquidity_native} ${nativeSymbol()}` : "0";
+        const tokenUrl = explorerTokenUrl(data.token);
+        const dexUrl = dexScreenerUrl(data.token);
+        const cmcUrl = coinMarketCapUrl(data.token);
+        const pairUrl = data.pair ? explorerAddrUrl(data.pair) : "#";
+
+        // Boolean flags with checkmark/cross
+        const boolIcon = (val) => val ? '<span style="color:#e74c3c">✗</span>' : '<span style="color:#02c076">✓</span>';
+        const boolIconGood = (val) => val ? '<span style="color:#02c076">✓</span>' : '<span style="color:#e74c3c">✗</span>';
+
+        // API status bar
+        const apiDot = (ok) => ok ? '🟢' : '🔴';
+        const apiCount = [data.goplus_ok, data.honeypot_ok, data.dexscreener_ok, data.coingecko_ok, data.tokensniffer_ok].filter(Boolean).length;
+
+        // DexScreener data
+        const dxVol = data.dexscreener_volume_24h > 0 ? `$${Number(data.dexscreener_volume_24h).toLocaleString()}` : "—";
+        const dxLiq = data.dexscreener_liquidity > 0 ? `$${Number(data.dexscreener_liquidity).toLocaleString()}` : "—";
+        const dxAge = data.dexscreener_age_hours != null ? `${data.dexscreener_age_hours.toFixed(1)}h` : "—";
+        const dxBuys = data.dexscreener_buys_24h || 0;
+        const dxSells = data.dexscreener_sells_24h || 0;
+
+        // TokenSniffer
+        const tsScore = data.tokensniffer_score != null ? `${data.tokensniffer_score}/100` : "—";
+        const tsScam = data.tokensniffer_is_scam;
+
+        // Supply
+        const supply = data.total_supply ? Number(data.total_supply).toLocaleString() : "—";
+        const holders = data.holder_count || "—";
+
+        // Risk reasons
+        const reasons = (data.risk_reasons && data.risk_reasons.length)
+            ? data.risk_reasons.map(r => `  ⚠️ ${r}`).join('<br>')
+            : '  ✅ Sin alertas';
+
+        return `
+<div class="token-log-card">
+  <div class="tlc-header">
+    <span class="tlc-risk">${rIcon} ${data.risk.toUpperCase()}</span>
+    <strong class="tlc-symbol">${data.symbol}</strong>
+    <span class="tlc-name">(${data.name})</span>
+    <span class="tlc-block">Block #${Number(data.block).toLocaleString()}</span>
+  </div>
+  <div class="tlc-links">
+    📋 <a href="${tokenUrl}" target="_blank">${data.token}</a>
+    &nbsp;|&nbsp; 🔗 <a href="${dexUrl}" target="_blank">DexScreener</a>
+    &nbsp;|&nbsp; 📈 <a href="${cmcUrl}" target="_blank">CoinMarketCap</a>
+    &nbsp;|&nbsp; 🏊 <a href="${pairUrl}" target="_blank">Pair</a>
+  </div>
+  <div class="tlc-grid">
+    <div class="tlc-section">
+      <div class="tlc-title">💰 Liquidez</div>
+      <div>USD: <strong>${liqStr}</strong></div>
+      <div>Native: ${liqNative}</div>
+      <div>Min required: $${Number(parseFloat(setMinLiq?.value) || 5000).toLocaleString()}</div>
+      <div>Passes: ${data.has_liquidity ? '<span style="color:#02c076">SÍ ✓</span>' : '<span style="color:#e74c3c">NO ✗</span>'}</div>
+    </div>
+    <div class="tlc-section">
+      <div class="tlc-title">📊 Impuestos</div>
+      <div>Buy Tax: <strong>${data.buy_tax}%</strong></div>
+      <div>Sell Tax: <strong>${data.sell_tax}%</strong></div>
+      <div>Honeypot: ${data.is_honeypot ? '🍯 <span style="color:#e74c3c">SÍ</span>' : '<span style="color:#02c076">NO ✓</span>'}</div>
+    </div>
+    <div class="tlc-section">
+      <div class="tlc-title">🔒 Seguridad</div>
+      <div>${boolIcon(data.is_mintable)} Mintable</div>
+      <div>${boolIcon(data.has_blacklist)} Blacklist</div>
+      <div>${boolIcon(data.can_pause_trading)} Pause Trading</div>
+      <div>${boolIcon(data.is_proxy)} Proxy</div>
+      <div>${boolIcon(data.has_hidden_owner)} Hidden Owner</div>
+      <div>${boolIcon(data.can_self_destruct)} Self-Destruct</div>
+      <div>${boolIcon(data.cannot_sell_all)} Cannot Sell All</div>
+      <div>${boolIcon(data.owner_can_change_balance)} Owner Changes Bal</div>
+      <div>${boolIconGood(data.is_open_source)} Open Source</div>
+      <div>${boolIcon(data.has_owner)} Has Owner</div>
+    </div>
+    <div class="tlc-section">
+      <div class="tlc-title">📈 DexScreener</div>
+      <div>Pairs: ${data.dexscreener_pairs || 0}</div>
+      <div>Vol 24h: ${dxVol}</div>
+      <div>Liq: ${dxLiq}</div>
+      <div>Buys: ${dxBuys} | Sells: ${dxSells}</div>
+      <div>Age: ${dxAge}</div>
+      <div style="margin-top:4px;font-weight:600">Variación Precio</div>
+      <div>5m: <span style="color:${(data.price_change_m5||0)>=0?'#02c076':'#e74c3c'}">${(data.price_change_m5||0).toFixed(1)}%</span></div>
+      <div>1h: <span style="color:${(data.price_change_h1||0)>=0?'#02c076':'#e74c3c'}">${(data.price_change_h1||0).toFixed(1)}%</span></div>
+      <div>6h: <span style="color:${(data.price_change_h6||0)>=0?'#02c076':'#e74c3c'}">${(data.price_change_h6||0).toFixed(1)}%</span></div>
+      <div>24h: <span style="color:${(data.price_change_h24||0)>=0?'#02c076':'#e74c3c'}">${(data.price_change_h24||0).toFixed(1)}%</span></div>
+    </div>
+    <div class="tlc-section">
+      <div class="tlc-title">🔐 LP Lock</div>
+      <div>Bloqueado: ${data.lp_locked ? '<span style="color:#02c076">SÍ ✓</span>' : '<span style="color:#e74c3c">NO ✗</span>'}</div>
+      <div>% Locked: <strong>${(data.lp_lock_percent||0).toFixed(1)}%</strong></div>
+      <div>Restante: ${data.lp_lock_hours_remaining > 0 ? `<strong>${data.lp_lock_hours_remaining.toFixed(1)}h</strong>` : '—'}</div>
+      <div>Fuente: ${data.lp_lock_source || '—'}</div>
+    </div>
+    <div class="tlc-section">
+      <div class="tlc-title">🌐 Plataformas</div>
+      <div>${boolIconGood(data.listed_coingecko)} CoinGecko</div>
+      <div>${boolIconGood(data.has_website)} Website</div>
+      <div>${boolIconGood(data.has_social_links)} Redes Sociales</div>
+      <div>TokenSniffer: ${tsScore}${tsScam ? ' 🚩 SCAM' : ''}</div>
+      <div>Supply: ${supply}</div>
+      <div>Holders: ${holders}</div>
+    </div>
+    <div class="tlc-section">
+      <div class="tlc-title">🔌 APIs (${apiCount}/5)</div>
+      <div>${apiDot(data.goplus_ok)} GoPlus</div>
+      <div>${apiDot(data.honeypot_ok)} Honeypot.is</div>
+      <div>${apiDot(data.dexscreener_ok)} DexScreener</div>
+      <div>${apiDot(data.coingecko_ok)} CoinGecko</div>
+      <div>${apiDot(data.tokensniffer_ok)} TokenSniffer</div>
+    </div>
+  </div>
+  <div class="tlc-reasons">
+    <div class="tlc-title">🚩 Risk Reasons</div>
+    ${reasons}
+  </div>
+</div>`.trim();
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -182,6 +413,150 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(obj));
         }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+     *  Swap execution (auto-buy / auto-sell / manual)
+     * ═══════════════════════════════════════════════════════════════ */
+
+    /** Tracks tokens currently being bought to avoid double-buys. */
+    const _buyingTokens = new Set();
+
+    /**
+     * Execute a BUY swap: native → token via DEX router.
+     * @param {string}  tokenAddress  - The token contract address.
+     * @param {string}  symbol        - Token symbol for logging.
+     * @param {number}  amountNative  - Amount of native coin to spend (e.g. 0.05 BNB).
+     * @param {number}  slippage      - Slippage tolerance in % (e.g. 12).
+     * @param {string}  [source]      - "auto" | "manual" for feed labels.
+     * @returns {Promise<{success:boolean, txHash?:string}>}
+     */
+    async function executeSnipeBuy(tokenAddress, symbol, amountNative, slippage, source = "auto", autoHoldHours = 0) {
+        if (_buyingTokens.has(tokenAddress)) {
+            addFeed(`⏳ Already buying ${symbol} — skipping duplicate.`, "warn");
+            return { success: false };
+        }
+        _buyingTokens.add(tokenAddress);
+
+        const label = source === "auto" ? "🤖 AUTO-BUY" : "🎯 MANUAL BUY";
+
+        try {
+            // 1) Ensure wallet + TxModule are ready
+            if (!(await ensureTxReady())) {
+                addFeed(`${label}: ❌ Wallet not connected — cannot swap.`, "error");
+                return { success: false };
+            }
+
+            const native = nativeSymbol();
+            addFeed(`${label}: Swapping ${amountNative} ${native} → ${symbol} (slippage ${slippage}%)…`, "system");
+
+            // 2) Execute swap: tokenIn="" means native coin
+            const receipt = await TxModule.swap("", tokenAddress, amountNative.toString(), slippage);
+
+            const txHash = receipt.hash || receipt.transactionHash || "";
+            const txUrl  = explorerTxUrl(txHash);
+            addFeedHTML(`${label}: ✅ <strong>COMPRADO!</strong> ${amountNative} ${native} → ${symbol} | Block #${receipt.blockNumber} | <a href="${txUrl}" target="_blank" style="color:#02c076;text-decoration:underline;">${txHash.slice(0,14)}…</a>`, "opportunity");
+
+            // 3) Register the position in the backend for TP/SL tracking
+            const buyPriceUsd = await _estimateBuyPrice(tokenAddress, amountNative);
+            sendWS({
+                action: "register_snipe",
+                token:     tokenAddress,
+                symbol:    symbol,
+                buy_price: buyPriceUsd,
+                amount:    amountNative,
+                tx:        txHash,
+                auto_hold_hours: autoHoldHours,
+            });
+
+            return { success: true, txHash };
+        } catch (err) {
+            const reason = err.reason || err.shortMessage || err.message || String(err);
+            addFeed(`${label}: ❌ COMPRA FALLIDA — ${reason}`, "error");
+            console.error("executeSnipeBuy error:", err);
+            return { success: false };
+        } finally {
+            _buyingTokens.delete(tokenAddress);
+        }
+    }
+
+    /**
+     * Execute a SELL swap: token → native via DEX router.
+     * Sells ALL tokens held for the given token address.
+     * @param {string}  tokenAddress  - Token to sell.
+     * @param {string}  symbol        - Token symbol for logging.
+     * @param {number}  slippage      - Slippage tolerance in %.
+     * @param {string}  [reason]      - "tp" | "sl" | "manual" for feed labels.
+     * @returns {Promise<{success:boolean, txHash?:string}>}
+     */
+    async function executeSnipeSell(tokenAddress, symbol, slippage, reason = "manual") {
+        const label = reason === "tp"  ? "🏆 TAKE-PROFIT SELL"
+                    : reason === "sl"  ? "🛑 STOP-LOSS SELL"
+                    :                    "💰 MANUAL SELL";
+
+        try {
+            if (!(await ensureTxReady())) {
+                addFeed(`${label}: ❌ Wallet not connected — cannot sell.`, "error");
+                return { success: false };
+            }
+
+            // Get token balance
+            const tokenContract = new ethers.Contract(
+                tokenAddress,
+                ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"],
+                ethersProvider
+            );
+            const [rawBal, decimals] = await Promise.all([
+                tokenContract.balanceOf(wallet.address),
+                tokenContract.decimals(),
+            ]);
+            const tokenBal = ethers.formatUnits(rawBal, decimals);
+
+            if (parseFloat(tokenBal) <= 0) {
+                addFeed(`${label}: ⚠️ No ${symbol} balance to sell.`, "warn");
+                return { success: false };
+            }
+
+            const native = nativeSymbol();
+            addFeed(`${label}: Selling ${parseFloat(tokenBal).toFixed(4)} ${symbol} → ${native}…`, "system");
+
+            // Execute sell: tokenIn = token, tokenOut = "" (native)
+            const receipt = await TxModule.swap(tokenAddress, "", tokenBal, slippage);
+
+            const txHash = receipt.hash || receipt.transactionHash || "";
+            const txUrl  = explorerTxUrl(txHash);
+            addFeedHTML(`${label}: ✅ <strong>VENDIDO!</strong> ${parseFloat(tokenBal).toFixed(4)} ${symbol} → ${native} | Block #${receipt.blockNumber} | <a href="${txUrl}" target="_blank" style="color:#02c076;text-decoration:underline;">${txHash.slice(0,14)}…</a>`, "opportunity");
+
+            // Mark position as sold in backend
+            sendWS({
+                action: "mark_snipe_sold",
+                token:   tokenAddress,
+                sell_tx: txHash,
+            });
+
+            return { success: true, txHash };
+        } catch (err) {
+            const reason2 = err.reason || err.shortMessage || err.message || String(err);
+            addFeed(`${label}: ❌ VENTA FALLIDA — ${reason2}`, "error");
+            console.error("executeSnipeSell error:", err);
+            return { success: false };
+        }
+    }
+
+    /**
+     * Try to estimate the buy price in USD using DexScreener.
+     * Falls back to 0 if unavailable (backend will update it via polling).
+     */
+    async function _estimateBuyPrice(tokenAddress, amountNative) {
+        try {
+            const chain = (wallet.chain_id || 56) === 56 ? "bsc" : "ethereum";
+            const resp = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`, { signal: AbortSignal.timeout(3000) });
+            if (!resp.ok) return 0;
+            const json = await resp.json();
+            const pair = json.pairs?.[0];
+            if (pair && pair.priceUsd) return parseFloat(pair.priceUsd);
+        } catch (_) {}
+        return 0;
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -275,26 +650,37 @@
 
             case "token_detected":
                 {
-                    const liqTag = data.has_liquidity ? "💧" : "🚫";
-                    const liqStr = data.liquidity_usd > 0 ? `$${Number(data.liquidity_usd).toLocaleString()}` : "$0";
-                    const rIcon = data.risk === "safe" ? "🟢" : data.risk === "warning" ? "🟡" : data.risk === "danger" ? "🔴" : "⚪";
-                    addFeed(`${liqTag} ${data.symbol} (${data.name}) — ${rIcon} ${data.risk.toUpperCase()} | Liq: ${liqStr} | Buy: ${data.buy_tax}% | Sell: ${data.sell_tax}%`, data.has_liquidity ? "good" : "warn");
-                    if (data.is_honeypot) addFeed(`   🍯 HONEYPOT: ${data.symbol}`, "error");
-                    if (data.risk_reasons && data.risk_reasons.length) addFeed(`   ⚠️ ${data.risk_reasons.join(", ")}`, "warn");
+                    // Full log card with ALL token data
+                    const cardType = data.risk === "danger" ? "error" : data.risk === "safe" ? "good" : "warn";
+                    addFeedHTML(buildTokenLogCard(data), cardType);
 
                     // Add to full detected list & table
                     addAllDetected(data);
                     pipeStats.analyzed++;
                     pipeAnalyzeCnt.textContent = pipeStats.analyzed;
                     flashPipe("pipe-analyze");
+
+                    // Auto-update log modal if open
+                    _refreshLogModal(data);
                 }
                 break;
 
             case "contract_analysis":
-                // Detailed analysis for liquid tokens (already in table from token_detected)
+                // Already shown in token_detected log card — skip duplicate
+                break;
+
+            case "token_updated":
                 {
-                    const riskIcon2 = data.risk === "safe" ? "🟢" : data.risk === "warning" ? "🟡" : "🔴";
-                    addFeed(`🛡️ Full analysis: ${data.symbol} — ${riskIcon2} ${data.risk.toUpperCase()} | Buy: ${data.buy_tax}% | Sell: ${data.sell_tax}% | Liq: $${data.liquidity_usd}`, data.risk === "danger" ? "error" : "good");
+                    // Real-time refresh of a previously detected token
+                    const idx = allDetected.findIndex(d => d.token === data.token);
+                    if (idx !== -1) {
+                        // Preserve the original block number
+                        data.block = data.block || allDetected[idx].block;
+                        allDetected[idx] = data;
+                        renderDetectedTable();
+                    }
+                    // Refresh log modal if it shows this token
+                    _refreshLogModal(data);
                 }
                 break;
 
@@ -302,9 +688,16 @@
                 pipeStats.sniped++;
                 pipeSnipeCnt.textContent = pipeStats.sniped;
                 flashPipe("pipe-snipe");
-                addFeed(`🎯 OPPORTUNITY: ${data.symbol} — $${data.liquidity_usd} liquidity — Risk: ${data.risk}`, "opportunity");
+                {
+                    const lockInfo = data.lp_locked ? ` | 🔒 LP ${(data.lp_lock_percent||0).toFixed(0)}% locked (${(data.lp_lock_hours||0).toFixed(1)}h)` : "";
+                    addFeed(`🎯 OPPORTUNITY: ${data.symbol} — $${data.liquidity_usd} liquidity — Risk: ${data.risk}${lockInfo}`, "opportunity");
+                }
                 if (data.auto_buy) {
-                    addFeed(`🤖 Auto-buy is ON — executing…`, "system");
+                    addFeed(`🤖 Auto-buy is ON — executing swap…`, "system");
+                    const buyAmt  = parseFloat(setBuyAmount.value) || 0.05;
+                    const slip    = parseFloat(setSlippage.value)  || 12;
+                    const autoHold = data.auto_hold_hours || 0;
+                    executeSnipeBuy(data.token, data.symbol, buyAmt, slip, "auto", autoHold);
                 }
                 break;
 
@@ -317,11 +710,29 @@
             case "take_profit_alert":
                 addFeed(`🏆 TAKE PROFIT HIT! ${data.symbol} at +${data.pnl_percent}% (target: +${data.target}%)`, "opportunity");
                 flashPipe("pipe-profit");
+                pipeProfitCnt.textContent = (parseInt(pipeProfitCnt.textContent) || 0) + 1;
+                {
+                    const slip = parseFloat(setSlippage.value) || 12;
+                    executeSnipeSell(data.token, data.symbol, slip, "tp");
+                }
                 break;
 
             case "stop_loss_alert":
                 addFeed(`🛑 STOP LOSS HIT! ${data.symbol} at ${data.pnl_percent}% (limit: ${data.target}%)`, "error");
                 flashPipe("pipe-profit");
+                {
+                    const slip = parseFloat(setSlippage.value) || 12;
+                    executeSnipeSell(data.token, data.symbol, slip, "sl");
+                }
+                break;
+
+            case "time_limit_alert":
+                addFeed(`⏰ TIME LIMIT! ${data.symbol} — ${data.held_hours}h/${data.max_hold_hours}h — P&L: ${data.pnl_percent}%`, "opportunity");
+                flashPipe("pipe-profit");
+                {
+                    const slip = parseFloat(setSlippage.value) || 12;
+                    executeSnipeSell(data.token, data.symbol, slip, "time");
+                }
                 break;
 
             case "settings_updated":
@@ -329,7 +740,22 @@
                 break;
 
             case "snipe_registered":
-                addFeed(`✅ Position registered: ${data.symbol}`, "good");
+                addFeed(`✅ Position registered: ${data.symbol} — tracking TP/SL`, "good");
+                // Add to local active snipes and re-render table
+                activeSnipes.push(data);
+                renderSnipes();
+                break;
+
+            case "snipe_sold":
+                addFeed(`💰 Position sold: ${data.symbol}`, "good");
+                {
+                    const idx = activeSnipes.findIndex(s => s.token_address === data.token_address);
+                    if (idx !== -1) {
+                        activeSnipes[idx].status = "sold";
+                        activeSnipes[idx].sell_tx = data.sell_tx || "";
+                    }
+                    renderSnipes();
+                }
                 break;
 
             case "error":
@@ -354,6 +780,7 @@
             if (setTP)         setTP.value         = state.settings.take_profit || 40;
             if (setSL)         setSL.value         = state.settings.stop_loss || 15;
             if (setSlippage)   setSlippage.value   = state.settings.slippage || 12;
+            if (setMaxHold)    setMaxHold.value    = state.settings.max_hold_hours || 0;
             if (setOnlySafe)   setOnlySafe.checked = state.settings.only_safe !== false;
             if (setAutoBuy)    setAutoBuy.checked  = !!state.settings.auto_buy;
             if (setMaxConcurrent) setMaxConcurrent.value = state.settings.max_concurrent || 5;
@@ -449,6 +876,31 @@
         setTimeout(() => el.classList.remove("pipe-flash"), 600);
     }
 
+    // ─── Log modal auto-update logic ──────
+    function _refreshLogModal(data) {
+        if (!logModal || logModal.style.display === "none") return;
+
+        // auto-follow → always show latest token
+        // or if same token is being viewed → update its data
+        if (_logAutoFollow || (data.token && data.token === _logModalAddr)) {
+            _openLogForData(data);
+        }
+    }
+
+    function _openLogForData(data) {
+        _logModalAddr = data.token;
+        logModalTitle.innerHTML = `📋 Log — <strong>${data.symbol || "?"}</strong> (${data.name || "Unknown"})`;
+        logModalBody.innerHTML = buildTokenLogCard(data);
+        logModal.style.display = "flex";
+
+        // Update auto-follow button state
+        const afBtn = document.getElementById("btn-log-auto-follow");
+        if (afBtn) {
+            afBtn.classList.toggle("active", _logAutoFollow);
+            afBtn.textContent = _logAutoFollow ? "⏩ Auto" : "⏸ Auto";
+        }
+    }
+
     // ─── ALL Detected tokens (liquid + no-liquid) ──────
     function addAllDetected(data) {
         allDetected.push(data);
@@ -509,6 +961,7 @@
 
             const explorer = chainSelect.value === "56" ? "bscscan.com" : "etherscan.io";
             const dexChain = chainSelect.value === "56" ? "bsc" : "ethereum";
+            const cmcChain = chainSelect.value === "56" ? "bsc" : "ethereum";
 
             // ── Security flags pills ──
             const flags = [];
@@ -576,11 +1029,17 @@
                     <a class="btn-sniper btn-mini btn-view-dex"
                        href="https://dexscreener.com/${dexChain}/${data.token}"
                        target="_blank" rel="noopener" title="DEX Screener">📊</a>
+                    <a class="btn-sniper btn-mini btn-view-cmc"
+                       href="https://coinmarketcap.com/dexscan/${cmcChain}/${data.token}"
+                       target="_blank" rel="noopener" title="CoinMarketCap">💹</a>
                     <button class="btn-sniper btn-mini btn-view-chart"
                         data-token="${data.token || ""}"
                         data-symbol="${data.symbol || "?"}"
                         data-pair="${data.pair || ""}"
                         title="Ver gráfico de precio">📈</button>
+                    <button class="btn-sniper btn-mini btn-view-log"
+                        data-idx="${allDetected.indexOf(data)}"
+                        title="Ver log completo">📋</button>
                     ${hasLiq ? `<button class="btn-sniper btn-mini btn-buy-snipe"
                         data-token="${data.token || ""}"
                         data-symbol="${data.symbol || "?"}"
@@ -880,9 +1339,34 @@
     }
 
     // ─── Snipes table ───────────────────────────────────
+    function _formatCountdown(s) {
+        if (!s || !s.timestamp || !s.max_hold_hours || s.max_hold_hours <= 0) return "—";
+        const now = Date.now() / 1000;
+        const elapsed = now - s.timestamp;
+        const limitSec = s.max_hold_hours * 3600;
+        const remaining = Math.max(0, limitSec - elapsed);
+        if (remaining <= 0) return '<span style="color:#f6465d">⏰ 0:00:00</span>';
+        const h = Math.floor(remaining / 3600);
+        const m = Math.floor((remaining % 3600) / 60);
+        const sec = Math.floor(remaining % 60);
+        const txt = `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+        // Color: red if < 1h, yellow if < 3h, normal otherwise
+        if (remaining < 3600) return `<span style="color:#f6465d">⏰ ${txt}</span>`;
+        if (remaining < 10800) return `<span style="color:#f0b90b">⏳ ${txt}</span>`;
+        return `⏳ ${txt}`;
+    }
+
+    function _formatHeld(s) {
+        if (!s || !s.timestamp) return "";
+        const elapsed = (s.held_seconds != null) ? s.held_seconds : Math.floor(Date.now() / 1000 - s.timestamp);
+        const h = Math.floor(elapsed / 3600);
+        const m = Math.floor((elapsed % 3600) / 60);
+        return `${h}h${String(m).padStart(2,"0")}m`;
+    }
+
     function renderSnipes() {
         if (!activeSnipes.length) {
-            snipesTbody.innerHTML = '<tr class="empty-row"><td colspan="6">No active positions</td></tr>';
+            snipesTbody.innerHTML = '<tr class="empty-row"><td colspan="8">No active positions</td></tr>';
             return;
         }
 
@@ -894,6 +1378,14 @@
                               : s.status === "sold"   ? '<span class="status-badge sold">SOLD</span>'
                               :                         '<span class="status-badge stopped">STOPPED</span>';
 
+            const sellBtn = s.status === "active"
+                ? `<button class="btn-sell-snipe" data-token="${s.token_address}" data-symbol="${s.symbol || '?'}" title="Sell now">💰 Sell</button>`
+                : "—";
+
+            const countdown = _formatCountdown(s);
+            const held = _formatHeld(s);
+            const timeCell = (s.max_hold_hours > 0) ? `${countdown}<br><small style="color:#848e9c">${held}</small>` : (held ? `<small style="color:#848e9c">${held}</small>` : "—");
+
             const tr = document.createElement("tr");
             tr.dataset.token = s.token_address;
             tr.innerHTML = `
@@ -902,7 +1394,9 @@
                 <td>$${(s.current_price_usd || 0).toFixed(6)}</td>
                 <td class="${pnlClass}">${pnlText}</td>
                 <td>+${s.take_profit}% / -${s.stop_loss}%</td>
+                <td>${timeCell}</td>
                 <td>${statusBadge}</td>
+                <td>${sellBtn}</td>
             `;
             snipesTbody.appendChild(tr);
         });
@@ -915,6 +1409,9 @@
             existing.current_price_usd = data.current_price || existing.current_price_usd;
             existing.pnl_percent = data.pnl_percent || existing.pnl_percent;
             existing.status = data.status || existing.status;
+            if (data.timestamp) existing.timestamp = data.timestamp;
+            if (data.max_hold_hours != null) existing.max_hold_hours = data.max_hold_hours;
+            if (data.held_seconds != null) existing.held_seconds = data.held_seconds;
         }
         renderSnipes();
     }
@@ -984,6 +1481,7 @@
             take_profit:       parseFloat(setTP.value)        || 40,
             stop_loss:         parseFloat(setSL.value)        || 15,
             slippage:          parseFloat(setSlippage.value)  || 12,
+            max_hold_hours:    parseFloat(setMaxHold.value)    || 0,
             only_safe:         setOnlySafe.checked,
             auto_buy:          setAutoBuy.checked,
             max_concurrent:    parseInt(setMaxConcurrent.value) || 5,
@@ -994,7 +1492,7 @@
         addFeed("Saving settings…", "system");
     });
 
-    // Delegate click on "Chart" and "Snipe" buttons in detected table
+    // Delegate click on "Chart", "Log" and "Snipe" buttons in detected table
     detectedTbody.addEventListener("click", (e) => {
         // Chart button
         const chartBtn = e.target.closest(".btn-view-chart");
@@ -1006,7 +1504,19 @@
             return;
         }
 
-        // Snipe button
+        // Log button — open full log modal
+        const logBtn = e.target.closest(".btn-view-log");
+        if (logBtn) {
+            const idx = parseInt(logBtn.dataset.idx);
+            const data = allDetected[idx];
+            if (data) {
+                _logAutoFollow = false; // user picked a specific token
+                _openLogForData(data);
+            }
+            return;
+        }
+
+        // Snipe button — execute a manual buy swap
         const btn = e.target.closest(".btn-buy-snipe");
         if (!btn) return;
 
@@ -1015,9 +1525,59 @@
 
         if (!token) return;
 
-        // Open token on DEX Screener for quick action
-        const chain = chainSelect.value === "56" ? "bsc" : "ethereum";
-        window.open(`https://dexscreener.com/${chain}/${token}`, "_blank");
+        const buyAmt  = parseFloat(setBuyAmount.value) || 0.05;
+        const slip    = parseFloat(setSlippage.value)  || 12;
+
+        if (!confirm(`Buy ${symbol} with ${buyAmt} native (slippage ${slip}%)?`)) return;
+
+        btn.disabled = true;
+        btn.textContent = "⏳";
+        executeSnipeBuy(token, symbol, buyAmt, slip, "manual").then(result => {
+            btn.disabled = false;
+            btn.textContent = result.success ? "✅" : "🎯";
+        });
+    });
+
+    // Close log modal
+    function _closeLogModal() {
+        logModal.style.display = "none";
+        _logModalAddr = null;
+    }
+    if (btnCloseLogModal) btnCloseLogModal.addEventListener("click", _closeLogModal);
+    if (logModal) logModal.addEventListener("click", (e) => { if (e.target === logModal) _closeLogModal(); });
+
+    // Auto-follow toggle
+    const btnLogAutoFollow = document.getElementById("btn-log-auto-follow");
+    if (btnLogAutoFollow) {
+        btnLogAutoFollow.addEventListener("click", () => {
+            _logAutoFollow = !_logAutoFollow;
+            btnLogAutoFollow.classList.toggle("active", _logAutoFollow);
+            btnLogAutoFollow.textContent = _logAutoFollow ? "⏩ Auto" : "⏸ Auto";
+            if (_logAutoFollow && allDetected.length) {
+                // Jump to latest token immediately
+                _openLogForData(allDetected[allDetected.length - 1]);
+            }
+        });
+    }
+
+    // Delegate click on "Sell" buttons in active snipes table
+    snipesTbody.addEventListener("click", (e) => {
+        const btn = e.target.closest(".btn-sell-snipe");
+        if (!btn) return;
+
+        const token  = btn.dataset.token;
+        const symbol = btn.dataset.symbol;
+        if (!token) return;
+
+        const slip = parseFloat(setSlippage.value) || 12;
+        if (!confirm(`Sell ALL ${symbol} tokens (slippage ${slip}%)?`)) return;
+
+        btn.disabled = true;
+        btn.textContent = "⏳";
+        executeSnipeSell(token, symbol, slip, "manual").then(result => {
+            btn.disabled = false;
+            btn.textContent = result.success ? "✅" : "💰 Sell";
+        });
     });
 
     /* ═══════════════════════════════════════════════════════════════

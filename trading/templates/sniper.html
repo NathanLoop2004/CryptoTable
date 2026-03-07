@@ -110,6 +110,10 @@
                     <label>Slippage (%)</label>
                     <input type="number" id="set-slippage" class="sniper-input" value="12" step="1">
                 </div>
+                <div class="setting-row">
+                    <label>Max Hold (horas)</label>
+                    <input type="number" id="set-max-hold" class="sniper-input" value="0" step="1" min="0" title="0 = sin límite. Ej: 23 = vender antes de 24h de lock">
+                </div>
                 <div class="setting-row toggle-row">
                     <label>Only Safe Tokens</label>
                     <label class="toggle">
@@ -319,6 +323,22 @@
         </div>
     </div>
 
+    <!-- ════ Token Log Modal ════ -->
+    <div class="modal-overlay" id="log-modal" style="display:none;">
+        <div class="modal-box modal-log">
+            <div class="modal-header">
+                <h3 class="modal-title" id="log-modal-title">📋 Token Log</h3>
+                <div class="log-modal-actions">
+                    <button class="btn-log-auto active" id="btn-log-auto-follow" title="Auto-seguir último token detectado">⏩ Auto</button>
+                    <button class="modal-close" id="btn-close-log-modal">✕</button>
+                </div>
+            </div>
+            <div class="modal-body" id="log-modal-body" style="padding:12px;overflow-y:auto;">
+                <!-- buildTokenLogCard HTML goes here -->
+            </div>
+        </div>
+    </div>
+
             <!-- Active Snipes -->
             <div class="sniper-card">
                 <h3 class="sc-title">💼 Active Positions</h3>
@@ -331,11 +351,13 @@
                                 <th>Current</th>
                                 <th>P&L</th>
                                 <th>TP / SL</th>
+                                <th>Time</th>
                                 <th>Status</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody id="snipes-tbody">
-                            <tr class="empty-row"><td colspan="6">No active positions</td></tr>
+                            <tr class="empty-row"><td colspan="8">No active positions</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -354,6 +376,8 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js" crossorigin="anonymous"></script>
+<script src="{% static 'js/transactions.js' %}"></script>
 <script src="{% static 'js/walletConnect.js' %}"></script>
 <script src="{% static 'js/pageSniper.js' %}"></script>
 {% endblock %}

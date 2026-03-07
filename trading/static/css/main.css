@@ -1599,6 +1599,13 @@ body.resizing-col *, body.resizing-row * {
     background: var(--gold); color: #000;
 }
 .btn-buy-snipe:hover { filter: brightness(1.15); }
+.btn-sell-snipe {
+    background: #e74c3c; color: #fff; border: none; cursor: pointer;
+    padding: 3px 8px; font-size: .68rem; border-radius: 4px;
+    font-weight: 600; transition: filter .15s;
+}
+.btn-sell-snipe:hover { filter: brightness(1.15); }
+.btn-sell-snipe:disabled { opacity: .5; cursor: not-allowed; }
 .btn-view-contract {
     background: rgba(255,255,255,.06); color: var(--text-dim);
 }
@@ -1612,7 +1619,7 @@ body.resizing-col *, body.resizing-row * {
     border-radius: var(--radius);
     padding: 8px;
     overflow-y: auto;
-    max-height: 240px;
+    max-height: 480px;
     font-family: var(--font-mono, monospace);
     font-size: .7rem;
     scrollbar-width: thin;
@@ -1635,6 +1642,86 @@ body.resizing-col *, body.resizing-row * {
     background: rgba(240, 185, 11, .06);
     padding: 3px 4px;
     border-radius: 3px;
+}
+.feed-line a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+.feed-line a:hover {
+    color: #fff;
+    text-decoration-style: solid;
+}
+
+/* ── Token log card in feed ── */
+.token-log-card {
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 4px 0;
+    font-size: .68rem;
+    line-height: 1.55;
+}
+.token-log-card a {
+    color: #64b5f6;
+    text-decoration: none;
+}
+.token-log-card a:hover {
+    text-decoration: underline;
+    color: #90caf9;
+}
+.tlc-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    margin-bottom: 6px;
+    font-size: .78rem;
+}
+.tlc-risk {
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.05);
+    font-weight: 700;
+    font-size: .72rem;
+}
+.tlc-symbol { font-size: .82rem; color: #fff; }
+.tlc-name { color: var(--text-dim); font-size: .72rem; }
+.tlc-block { margin-left: auto; color: var(--text-muted); font-size: .65rem; }
+.tlc-links {
+    color: var(--text-dim);
+    font-size: .65rem;
+    margin-bottom: 6px;
+    word-break: break-all;
+}
+.tlc-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px 12px;
+    margin-bottom: 6px;
+}
+.tlc-section {
+    background: rgba(255,255,255,.02);
+    border-radius: 4px;
+    padding: 4px 6px;
+}
+.tlc-title {
+    font-weight: 700;
+    color: var(--text-dim);
+    margin-bottom: 2px;
+    font-size: .66rem;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+}
+.tlc-reasons {
+    border-top: 1px solid rgba(255,255,255,.06);
+    padding-top: 4px;
+    color: var(--gold);
+}
+@media (max-width: 900px) {
+    .tlc-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* Responsive */
@@ -2071,6 +2158,42 @@ body.resizing-col *, body.resizing-row * {
 .legend-tip strong { color: #f0b90b; }
 .legend-tip .risk-badge { vertical-align: middle; }
 
+/* ═══ Token Log Modal ═══ */
+.modal-log {
+    max-width: 1060px;
+    width: 96vw;
+    max-height: 88vh;
+}
+.modal-log .token-log-card {
+    margin: 0;
+}
+.log-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.btn-log-auto {
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.12);
+    color: #8a8f98;
+    font-size: .8em;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all .2s;
+}
+.btn-log-auto:hover {
+    background: rgba(2, 192, 118, .15);
+    border-color: #02c076;
+    color: #02c076;
+}
+.btn-log-auto.active {
+    background: rgba(2, 192, 118, .2);
+    border-color: #02c076;
+    color: #02c076;
+    box-shadow: 0 0 8px rgba(2, 192, 118, .25);
+}
+
 /* ═══ Token Chart Modal ═══ */
 .modal-chart {
     max-width: 1100px;
@@ -2275,6 +2398,10 @@ body.resizing-col *, body.resizing-row * {
 /* Responsive chart modal */
 @media (max-width: 700px) {
     .modal-chart {
+        width: 99vw;
+        max-height: 95vh;
+    }
+    .modal-log {
         width: 99vw;
         max-height: 95vh;
     }
