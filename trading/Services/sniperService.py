@@ -83,6 +83,24 @@ PAIR_CREATED_TOPIC = "0x" + Web3.keccak(
     text="PairCreated(address,address,address,uint256)"
 ).hex()
 
+# Sync event topic — emitted by V2 pairs on every swap/mint/burn
+# Contains reserve0 & reserve1 directly in log data (no extra RPC call!)
+SYNC_TOPIC = "0x" + Web3.keccak(
+    text="Sync(uint112,uint112)"
+).hex()
+
+# WebSocket endpoints that support eth_subscribe
+WS_ENDPOINTS = {
+    56: [
+        "wss://bsc-rpc.publicnode.com",
+        "wss://bsc.drpc.org",
+    ],
+    1: [
+        "wss://ethereum-rpc.publicnode.com",
+        "wss://eth.drpc.org",
+    ],
+}
+
 # Minimal ERC-20 ABI for analysis
 ERC20_ABI = json.loads("""[
     {"constant":true,"inputs":[],"name":"name","outputs":[{"name":"","type":"string"}],"type":"function"},
@@ -562,24 +580,7 @@ class ContractAnalyzer:
             except (ValueError, TypeError):
                 pass
 
-            # ── DexScreener-based risk signals ──
-            if info.dexscreener_age_hours < 1:
-                info.risk_reasons.append("🔜 Par creado hace menos de 1 hora")
-            if info.dexscreener_volume_24h < 100 and info.dexscreener_pairs <= 1:
-                info.risk_reasons.append("📊 Volumen 24h muy bajo (<$100)")
-            total_txns = info.dexscreener_buys_24h + info.dexscreener_sells_24h
-            if total_txns < 5:
-                info.risk_reasons.append(f"👥 Muy pocas transacciones ({total_txns} en 24h)")
-
-            # ── Price dump detection ──
-            if info.dexscreener_price_change_h24 <= -50:
-                info.risk_reasons.append(f"📉 Caída 24h: {info.dexscreener_price_change_h24:.0f}% — posible dump")
-            elif info.dexscreener_price_change_h24 <= -30:
-                info.risk_reasons.append(f"📉 Caída 24h: {info.dexscreener_price_change_h24:.0f}%")
-            if info.dexscreener_price_change_h6 <= -40:
-                info.risk_reasons.append(f"📉 Caída 6h: {info.dexscreener_price_change_h6:.0f}%")
-            if info.dexscreener_price_change_h1 <= -25:
-                info.risk_reasons.append(f"📉 Caída 1h: {info.dexscreener_price_change_h1:.0f}%")
+            # (Risk reasons from DexScreener data are built in _rebuild_flag_reasons)
 
             logger.info(f"DexScreener for {info.symbol}: {info.dexscreener_pairs} pairs, ${info.dexscreener_volume_24h:.0f} vol")
 
@@ -715,6 +716,24 @@ class ContractAnalyzer:
                     reasons.append(f"🔐 Lock via: {info.lp_lock_source}")
             else:
                 reasons.append("⚠️ Liquidez NO bloqueada — riesgo de rug pull")
+
+        # ── From DexScreener data ──
+        if info._dexscreener_ok:
+            if info.dexscreener_age_hours < 1:
+                reasons.append("🔜 Par creado hace menos de 1 hora")
+            if info.dexscreener_volume_24h < 100 and info.dexscreener_pairs <= 1:
+                reasons.append("📊 Volumen 24h muy bajo (<$100)")
+            total_txns = info.dexscreener_buys_24h + info.dexscreener_sells_24h
+            if total_txns < 5:
+                reasons.append(f"👥 Muy pocas transacciones ({total_txns} en 24h)")
+            if info.dexscreener_price_change_h24 <= -50:
+                reasons.append(f"📉 Caída 24h: {info.dexscreener_price_change_h24:.0f}% — posible dump")
+            elif info.dexscreener_price_change_h24 <= -30:
+                reasons.append(f"📉 Caída 24h: {info.dexscreener_price_change_h24:.0f}%")
+            if info.dexscreener_price_change_h6 <= -40:
+                reasons.append(f"📉 Caída 6h: {info.dexscreener_price_change_h6:.0f}%")
+            if info.dexscreener_price_change_h1 <= -25:
+                reasons.append(f"📉 Caída 1h: {info.dexscreener_price_change_h1:.0f}%")
 
         return reasons
 
@@ -858,6 +877,13 @@ class SniperBot:
 
         # Native price (USD) — fetched periodically
         self.native_price_usd = 0
+
+        # ── Sync WebSocket listener state ──
+        self._sync_task: asyncio.Task | None = None
+        self._sync_ws = None               # aiohttp WebSocket connection
+        self._sync_sub_id: str | None = None
+        self._sync_needs_resub = False      # flag: new pairs added, need resubscribe
+        self._sync_tracked: set[str] = set()  # lowercase pair addresses currently subscribed
 
     def set_event_callback(self, cb):
         """Set async callback fn(event_dict) to push events to WS client."""
@@ -1008,15 +1034,34 @@ class SniperBot:
         }
 
     # ─── Refresh detected tokens (periodic re-check) ───────
-    async def _refresh_detected_tokens(self):
-        """Re-check liquidity and DexScreener data for recently detected tokens.
-        Emits 'token_updated' for any token whose data changed."""
-        # Only refresh the last 20 detected pairs (most recent, most relevant)
-        candidates = self.detected_pairs[-20:]
-        if not candidates:
+    async def _enrich_detected_tokens(self, fast_only: bool = False):
+        """Re-check liquidity and retry ALL failed APIs for recently detected tokens.
+        Emits 'token_updated' for every token so the frontend stays current.
+
+        fast_only=True  → only process tokens with incomplete API data (quick retry)
+        fast_only=False → process ALL tokens (full refresh including DexScreener prices)
+        """
+        all_pairs = self.detected_pairs[-50:]
+        if not all_pairs:
             return
 
-        # Limit concurrent refreshes
+        if fast_only:
+            # Only tokens that still have failed APIs
+            candidates = [
+                p for p in all_pairs
+                if p.token_info and not all([
+                    p.token_info._goplus_ok,
+                    p.token_info._honeypot_ok,
+                    p.token_info._dexscreener_ok,
+                    p.token_info._coingecko_ok,
+                    p.token_info._tokensniffer_ok,
+                ])
+            ]
+            if not candidates:
+                return
+        else:
+            candidates = all_pairs
+
         sem = asyncio.Semaphore(3)
 
         async def _refresh_one(pair: 'NewPair'):
@@ -1024,14 +1069,34 @@ class SniperBot:
                 try:
                     token = pair.new_token
                     pair_addr = pair.pair_address
+                    info = pair.token_info
+                    if not info:
+                        return
 
-                    # Re-check liquidity
+                    # Re-check on-chain liquidity
                     native_liq, usd_liq = await self._get_pair_liquidity(pair_addr)
 
-                    # Re-check DexScreener (lightweight, fast)
-                    info = pair.token_info
-                    if info:
-                        await self.analyzer._check_dexscreener_api(info)
+                    # Retry failed APIs + always refresh DexScreener for live data
+                    retry_tasks = []
+                    if not info._goplus_ok:
+                        retry_tasks.append(self.analyzer._check_goplus_api(info))
+                    if not info._honeypot_ok:
+                        retry_tasks.append(self.analyzer._check_honeypot_api(info))
+                    if not info._coingecko_ok:
+                        retry_tasks.append(self.analyzer._check_coingecko_api(info))
+                    if not info._tokensniffer_ok:
+                        retry_tasks.append(self.analyzer._check_tokensniffer_api(info))
+
+                    # Always re-check DexScreener (fresh price/volume/liquidity)
+                    retry_tasks.append(self.analyzer._check_dexscreener_api(info))
+
+                    if retry_tasks:
+                        logger.debug(f"Enriching {info.symbol}: {len(retry_tasks)} API(s)")
+                        await asyncio.gather(*retry_tasks, return_exceptions=True)
+
+                    # Use DexScreener liquidity as fallback if on-chain returns 0
+                    if usd_liq <= 0 and info and info.dexscreener_liquidity > 0:
+                        usd_liq = info.dexscreener_liquidity
 
                     old_liq = pair.liquidity_usd
                     pair.liquidity_native = native_liq
@@ -1062,10 +1127,8 @@ class SniperBot:
                                 passes = False
                             if info.is_honeypot:
                                 passes = False
-                            # LP must be locked
                             if not info.lp_locked:
                                 passes = False
-                            # Price history: reject severe dumps
                             if info._dexscreener_ok:
                                 if info.dexscreener_price_change_h24 <= -50:
                                     passes = False
@@ -1139,6 +1202,12 @@ class SniperBot:
         token_info, (native_liq, usd_liq) = await asyncio.gather(token_info_task, liquidity_task)
 
         new_pair.token_info = token_info
+
+        # Use DexScreener liquidity as fallback if on-chain returns 0
+        if usd_liq <= 0 and token_info.dexscreener_liquidity > 0:
+            usd_liq = token_info.dexscreener_liquidity
+            logger.info(f"Using DexScreener liquidity fallback: ${usd_liq:.2f} for {token_info.symbol}")
+
         new_pair.liquidity_native = native_liq
         new_pair.liquidity_usd = usd_liq
 
@@ -1158,6 +1227,7 @@ class SniperBot:
         )
 
         self.detected_pairs.append(new_pair)
+        self._notify_sync_resub()  # subscribe to Sync events for this new pair
         if len(self.detected_pairs) > 200:
             self.detected_pairs = self.detected_pairs[-100:]
 
@@ -1226,6 +1296,219 @@ class SniperBot:
                 "auto_hold_hours": auto_hold_h,
             })
 
+    # ═══════════════════════════════════════════════════════════
+    #  Real-time Sync event listener via WebSocket
+    # ═══════════════════════════════════════════════════════════
+
+    async def _run_sync_listener(self):
+        """
+        WebSocket listener for Sync(uint112,uint112) events on tracked pairs.
+        Connects to BSC/ETH WSS endpoint and subscribes to log events.
+        Provides real-time liquidity updates without polling.
+        Auto-reconnects on disconnect.
+        """
+        ws_list = WS_ENDPOINTS.get(self.chain_id, WS_ENDPOINTS[56])
+        ws_idx = 0
+
+        while self.running:
+            ws_url = ws_list[ws_idx % len(ws_list)]
+            try:
+                session = aiohttp.ClientSession()
+                ws = await session.ws_connect(
+                    ws_url,
+                    heartbeat=20,
+                    timeout=aiohttp.ClientWSTimeout(ws_close=10),
+                )
+                self._sync_ws = ws
+                self._sync_sub_id = None
+                logger.info(f"Sync WS connected: {ws_url}")
+                await self._emit("scan_info", {"message": f"🔌 Sync WS connected: {ws_url}"})
+
+                # Initial subscription
+                await self._subscribe_pairs_sync(ws)
+
+                async for msg in ws:
+                    if not self.running:
+                        break
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                            # Subscription confirmation
+                            if "result" in data and data.get("id") == 1:
+                                self._sync_sub_id = data["result"]
+                                logger.info(f"Sync subscription active: {self._sync_sub_id}")
+                            # Subscription event
+                            elif data.get("method") == "eth_subscription":
+                                log_data = data.get("params", {}).get("result")
+                                if log_data:
+                                    await self._handle_sync_log(log_data)
+                        except Exception as e:
+                            logger.debug(f"Sync WS message error: {e}")
+
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        break
+
+                    # Check if we need to resubscribe (new pairs added)
+                    if self._sync_needs_resub:
+                        self._sync_needs_resub = False
+                        await self._subscribe_pairs_sync(ws)
+
+            except Exception as e:
+                logger.warning(f"Sync WS error ({ws_url}): {e}")
+                await self._emit("scan_info", {"message": f"⚠️ Sync WS reconnecting…"})
+            finally:
+                self._sync_ws = None
+                self._sync_sub_id = None
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+
+            ws_idx += 1  # rotate to next endpoint
+            if self.running:
+                await asyncio.sleep(2)
+
+    async def _subscribe_pairs_sync(self, ws):
+        """Subscribe (or resubscribe) to Sync events for tracked pairs."""
+        # Collect pair addresses from the most recent detected pairs
+        addresses = []
+        for p in self.detected_pairs[-50:]:
+            addr = Web3.to_checksum_address(p.pair_address)
+            if addr not in addresses:
+                addresses.append(addr)
+
+        if not addresses:
+            return
+
+        # Unsubscribe old subscription first
+        if self._sync_sub_id:
+            try:
+                await ws.send_str(json.dumps({
+                    "jsonrpc": "2.0", "id": 2,
+                    "method": "eth_unsubscribe",
+                    "params": [self._sync_sub_id],
+                }))
+                self._sync_sub_id = None
+            except Exception:
+                pass
+
+        # Subscribe to Sync events on all tracked pair addresses
+        await ws.send_str(json.dumps({
+            "jsonrpc": "2.0", "id": 1,
+            "method": "eth_subscribe",
+            "params": ["logs", {
+                "address": addresses,
+                "topics": [SYNC_TOPIC],
+            }],
+        }))
+
+        self._sync_tracked = {a.lower() for a in addresses}
+        logger.info(f"Subscribed to Sync events for {len(addresses)} pairs")
+        await self._emit("scan_info", {
+            "message": f"📡 Sync WS tracking {len(addresses)} pairs in real-time",
+        })
+
+    async def _handle_sync_log(self, log: dict):
+        """
+        Process a real-time Sync event from WebSocket.
+        Decodes reserve0 & reserve1 directly from log data — zero extra RPC calls.
+        """
+        try:
+            pair_address_raw = log.get("address", "").lower()
+
+            # Find matching detected pair
+            pair = None
+            for p in self.detected_pairs:
+                if p.pair_address.lower() == pair_address_raw:
+                    pair = p
+                    break
+            if not pair:
+                return
+
+            # Decode reserves from log data
+            # Sync event data: abi.encode(uint112 reserve0, uint112 reserve1)
+            data_hex = log.get("data", "0x")
+            if len(data_hex) < 130:  # 0x + 64 + 64
+                return
+
+            reserve0 = int(data_hex[2:66], 16)
+            reserve1 = int(data_hex[66:130], 16)
+
+            # Determine which reserve is native (WBNB/WETH)
+            weth_lower = self.weth.lower()
+            if pair.token0.lower() == weth_lower:
+                native_reserve = reserve0 / 1e18
+            else:
+                native_reserve = reserve1 / 1e18
+
+            usd_liq = native_reserve * self.native_price_usd * 2
+            native_liq = native_reserve
+
+            # DexScreener fallback
+            info = pair.token_info
+            if usd_liq <= 0 and info and info.dexscreener_liquidity > 0:
+                usd_liq = info.dexscreener_liquidity
+
+            old_liq = pair.liquidity_usd
+            pair.liquidity_native = native_liq
+            pair.liquidity_usd = usd_liq
+
+            has_liquidity = usd_liq >= self.settings["min_liquidity_usd"]
+
+            if info:
+                # Emit instant update to frontend
+                event_data = self._build_token_event_data(
+                    pair.new_token, pair.pair_address, info,
+                    native_liq, usd_liq, has_liquidity,
+                    pair.block_number,
+                )
+                await self._emit("token_updated", event_data)
+
+                # Snipe opportunity: liquidity just appeared
+                if has_liquidity and old_liq < self.settings["min_liquidity_usd"]:
+                    passes = True
+                    if self.settings["only_safe"] and info.risk == "danger":
+                        passes = False
+                    if info.buy_tax > self.settings["max_buy_tax"]:
+                        passes = False
+                    if info.sell_tax > self.settings["max_sell_tax"]:
+                        passes = False
+                    if info.is_honeypot:
+                        passes = False
+                    if not info.lp_locked:
+                        passes = False
+                    if info._dexscreener_ok:
+                        if info.dexscreener_price_change_h24 <= -50:
+                            passes = False
+                        if info.dexscreener_price_change_h6 <= -40:
+                            passes = False
+                        if info.dexscreener_price_change_h1 <= -25:
+                            passes = False
+                    if passes:
+                        auto_hold_h = 0
+                        if info.lp_lock_hours_remaining > 1:
+                            auto_hold_h = round(info.lp_lock_hours_remaining - 1, 1)
+                        await self._emit("snipe_opportunity", {
+                            "token": pair.new_token,
+                            "symbol": info.symbol,
+                            "name": info.name,
+                            "risk": info.risk,
+                            "liquidity_usd": round(usd_liq, 2),
+                            "pair": pair.pair_address,
+                            "auto_buy": self.settings["auto_buy"],
+                            "lp_locked": info.lp_locked,
+                            "lp_lock_hours": info.lp_lock_hours_remaining,
+                            "lp_lock_percent": info.lp_lock_percent,
+                            "auto_hold_hours": auto_hold_h,
+                        })
+
+        except Exception as e:
+            logger.debug(f"Sync event handling error: {e}")
+
+    def _notify_sync_resub(self):
+        """Flag that new pairs were added and WS needs to resubscribe."""
+        self._sync_needs_resub = True
+
     # ─── Main polling loop ──────────────────────────────────
     async def run(self):
         """Main loop — polls for PairCreated events."""
@@ -1275,8 +1558,14 @@ class SniperBot:
         await self._emit("scan_info", {
             "message": f"Starting from block #{last_block:,}",
         })
+
+        # Launch real-time Sync WebSocket listener in background
+        self._sync_task = asyncio.ensure_future(self._run_sync_listener())
+        await self._emit("scan_info", {"message": "🚀 Real-time Sync WS listener launched"})
+
         price_tick = 0
-        refresh_tick = 0          # counter for detected-token refresh cycle
+        enrich_tick = 0           # Fast enrichment cycle (every ~3s)
+        slow_tick = 0              # Full refresh cycle (every ~15s)
         total_blocks_scanned = 0
         total_events_found = 0
 
@@ -1374,11 +1663,17 @@ class SniperBot:
                     # Update active snipes P&L
                     await self._update_active_snipes()
 
-                # Refresh detected tokens every ~20 seconds (13 ticks × 1.5s)
-                refresh_tick += 1
-                if refresh_tick >= 13:
-                    refresh_tick = 0
-                    await self._refresh_detected_tokens()
+                # FAST retry: incomplete tokens every ~3s (2 ticks × 1.5s)
+                enrich_tick += 1
+                if enrich_tick >= 2:
+                    enrich_tick = 0
+                    slow_tick += 1
+                    # Always do fast retry for tokens with failed APIs
+                    await self._enrich_detected_tokens(fast_only=True)
+                    # SLOW full refresh every ~15s (5 fast cycles)
+                    if slow_tick >= 5:
+                        slow_tick = 0
+                        await self._enrich_detected_tokens(fast_only=False)
 
                 # Emit heartbeat
                 await self._emit("heartbeat", {
@@ -1388,6 +1683,8 @@ class SniperBot:
                     "native_price": round(self.native_price_usd, 2),
                     "total_blocks_scanned": total_blocks_scanned,
                     "total_events_found": total_events_found,
+                    "sync_ws_active": self._sync_sub_id is not None,
+                    "sync_pairs_tracked": len(self._sync_tracked),
                 })
 
             except Exception as e:
@@ -1395,6 +1692,15 @@ class SniperBot:
                 await self._emit("error", {"message": str(e)[:200]})
 
             await asyncio.sleep(float(self.settings.get("poll_interval", 1.5)))
+
+        # Cancel Sync WS listener
+        if self._sync_task and not self._sync_task.done():
+            self._sync_task.cancel()
+            try:
+                await self._sync_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._sync_task = None
 
         # Cleanup shared session
         if self._http_session and not self._http_session.closed:

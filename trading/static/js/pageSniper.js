@@ -295,7 +295,7 @@
             : '  ✅ Sin alertas';
 
         return `
-<div class="token-log-card">
+<div class="token-log-card" data-token="${data.token}">
   <div class="tlc-header">
     <span class="tlc-risk">${rIcon} ${data.risk.toUpperCase()}</span>
     <strong class="tlc-symbol">${data.symbol}</strong>
@@ -596,6 +596,12 @@
                 statActive.textContent = data.active_snipes || 0;
                 if (data.native_price) statPrice.textContent = "$" + data.native_price;
                 pipeMempoolCnt.textContent = data.block ? Number(data.block).toLocaleString() : "—";
+                // Sync WS indicator
+                {
+                    const wsIcon = data.sync_ws_active ? "🟢" : "🔴";
+                    const wsText = data.sync_ws_active ? `WS ${data.sync_pairs_tracked || 0} pairs` : "WS off";
+                    if (pipeSnipeCnt) pipeSnipeCnt.title = `${wsIcon} ${wsText}`;
+                }
                 break;
 
             /* ── Verbose scan events ─────────────────────────── */
@@ -650,6 +656,7 @@
 
             case "token_detected":
                 {
+                    console.log("[TOKEN_DETECTED]", JSON.stringify(data, null, 2));
                     // Full log card with ALL token data
                     const cardType = data.risk === "danger" ? "error" : data.risk === "safe" ? "good" : "warn";
                     addFeedHTML(buildTokenLogCard(data), cardType);
@@ -671,6 +678,22 @@
 
             case "token_updated":
                 {
+                    console.log("[TOKEN_UPDATED]", data.symbol, {
+                        liquidity_usd: data.liquidity_usd,
+                        liquidity_native: data.liquidity_native,
+                        dexscreener_liquidity: data.dexscreener_liquidity,
+                        dexscreener_pairs: data.dexscreener_pairs,
+                        dexscreener_volume_24h: data.dexscreener_volume_24h,
+                        price_change_h1: data.price_change_h1,
+                        price_change_h24: data.price_change_h24,
+                        lp_locked: data.lp_locked,
+                        lp_lock_percent: data.lp_lock_percent,
+                        goplus_ok: data.goplus_ok,
+                        dexscreener_ok: data.dexscreener_ok,
+                        tokensniffer_ok: data.tokensniffer_ok,
+                        risk: data.risk,
+                        has_liquidity: data.has_liquidity,
+                    });
                     // Real-time refresh of a previously detected token
                     const idx = allDetected.findIndex(d => d.token === data.token);
                     if (idx !== -1) {
@@ -678,6 +701,14 @@
                         data.block = data.block || allDetected[idx].block;
                         allDetected[idx] = data;
                         renderDetectedTable();
+                    }
+                    // Live-update the feed card so DexScreener/LP/APIs refresh in place
+                    const feedCard = feedDiv.querySelector(`.token-log-card[data-token="${data.token}"]`);
+                    if (feedCard) {
+                        const tmp = document.createElement('div');
+                        tmp.innerHTML = buildTokenLogCard(data);
+                        const newCard = tmp.firstElementChild;
+                        feedCard.replaceWith(newCard);
                     }
                     // Refresh log modal if it shows this token
                     _refreshLogModal(data);
