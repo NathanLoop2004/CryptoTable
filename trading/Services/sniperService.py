@@ -246,7 +246,7 @@ class ActiveSnipe:
     current_price_usd: float = 0
     pnl_percent: float = 0
     take_profit: float = 40      # % to auto-sell
-    stop_loss: float = 15        # % to auto-sell
+    stop_loss: float = 20        # % to auto-sell
     status: str = "active"       # active | sold | stopped
     sell_tx: str = ""
     timestamp: float = 0
@@ -714,6 +714,13 @@ class ContractAnalyzer:
                 reasons.append(f"🔒 LP Locked {info.lp_lock_percent}% — {info.lp_lock_hours_remaining}h restantes")
                 if info.lp_lock_source:
                     reasons.append(f"🔐 Lock via: {info.lp_lock_source}")
+                # Warn about weak locks
+                if info.lp_lock_percent < 80:
+                    reasons.append(f"⚠️ Lock insuficiente: solo {info.lp_lock_percent}% (mínimo 80%)")
+                if 0 < info.lp_lock_hours_remaining < 24:
+                    reasons.append(f"⚠️ Lock demasiado corto: {info.lp_lock_hours_remaining}h (mínimo 24h)")
+                elif info.lp_lock_hours_remaining <= 0 and info.lp_lock_end_timestamp > 0:
+                    reasons.append("🚨 Lock EXPIRADO — owner puede retirar liquidez")
             else:
                 reasons.append("⚠️ Liquidez NO bloqueada — riesgo de rug pull")
 
@@ -830,7 +837,7 @@ class SniperBot:
             "max_sell_tax": 15,
             "buy_amount_native": 0.05,   # BNB/ETH to spend per snipe
             "take_profit": 40,           # %
-            "stop_loss": 15,             # %
+            "stop_loss": 20,             # %
             "auto_buy": False,           # auto-execute buys
             "only_safe": True,           # only buy "safe" risk tokens
             "slippage": 12,              # %
@@ -1129,12 +1136,22 @@ class SniperBot:
                                 passes = False
                             if not info.lp_locked:
                                 passes = False
+                            elif info.lp_lock_percent < 80:
+                                passes = False
+                            elif info.lp_lock_hours_remaining < 24:
+                                passes = False
                             if info._dexscreener_ok:
+                                # Reject severe dumps
                                 if info.dexscreener_price_change_h24 <= -50:
                                     passes = False
                                 if info.dexscreener_price_change_h6 <= -40:
                                     passes = False
                                 if info.dexscreener_price_change_h1 <= -25:
+                                    passes = False
+                                # Reject already pumped (bad entry)
+                                if info.dexscreener_price_change_m5 >= 30:
+                                    passes = False
+                                if info.dexscreener_price_change_h1 >= 50:
                                     passes = False
                             if passes:
                                 auto_hold_h = 0
@@ -1259,13 +1276,20 @@ class SniperBot:
         if token_info.is_honeypot:
             passes_safety = False
 
-        # LP must be locked to buy
+        # LP must be locked sufficiently to prevent rug pull
         if not token_info.lp_locked:
             passes_safety = False
             logger.info(f"Skipping {token_info.symbol}: LP not locked")
+        elif token_info.lp_lock_percent < 80:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: LP lock only {token_info.lp_lock_percent}% (need >=80%)")
+        elif token_info.lp_lock_hours_remaining < 24:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: LP lock only {token_info.lp_lock_hours_remaining}h remaining (need >24h)")
 
-        # Price history check: reject tokens with severe dumps
+        # Price history check: reject severe dumps AND reject already-pumped tokens
         if token_info._dexscreener_ok:
+            # Reject severe dumps (rug pull signs)
             if token_info.dexscreener_price_change_h24 <= -50:
                 passes_safety = False
                 logger.info(f"Skipping {token_info.symbol}: 24h dump {token_info.dexscreener_price_change_h24}%")
@@ -1275,6 +1299,13 @@ class SniperBot:
             if token_info.dexscreener_price_change_h1 <= -25:
                 passes_safety = False
                 logger.info(f"Skipping {token_info.symbol}: 1h dump {token_info.dexscreener_price_change_h1}%")
+            # Reject already pumped (bad entry — need to buy LOW)
+            if token_info.dexscreener_price_change_m5 >= 30:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: already pumped +{token_info.dexscreener_price_change_m5:.0f}% in 5m")
+            if token_info.dexscreener_price_change_h1 >= 50:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: already pumped +{token_info.dexscreener_price_change_h1:.0f}% in 1h")
 
         if passes_safety:
             # Auto-calculate max_hold from LP lock duration (sell 1h before expiry)
@@ -1654,14 +1685,11 @@ class SniperBot:
                         "message": "Waiting for new blocks...",
                     })
 
-                # Update price every ~30 seconds
+                # Update native price every ~30 seconds
                 price_tick += 1
                 if price_tick >= 10:
                     await self._fetch_native_price()
                     price_tick = 0
-
-                    # Update active snipes P&L
-                    await self._update_active_snipes()
 
                 # FAST retry: incomplete tokens every ~3s (2 ticks × 1.5s)
                 enrich_tick += 1
@@ -1670,6 +1698,8 @@ class SniperBot:
                     slow_tick += 1
                     # Always do fast retry for tokens with failed APIs
                     await self._enrich_detected_tokens(fast_only=True)
+                    # Update active snipes P&L every ~3s for real-time stop-loss
+                    await self._update_active_snipes()
                     # SLOW full refresh every ~15s (5 fast cycles)
                     if slow_tick >= 5:
                         slow_tick = 0
