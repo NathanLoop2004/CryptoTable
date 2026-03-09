@@ -1,25 +1,31 @@
 """
 sniperService.py — Core sniper bot service.
 
-Architecture (Professional v4):
+Architecture (Professional v5):
   mempool listener → pre-launch detector → token detector → contract analyzer
   → swap simulator → pump analyzer → smart money tracker → dev tracker
   → risk engine → trade executor → rug detector → profit manager
   → resource monitor → alert service → metrics service
+  → proxy detector → stress tester → volatility slippage
+  → ML predictor → social sentiment → dynamic contract scanner
+  → whale activity tracker → anomaly detector
 
 Modules:
   pumpAnalyzer.py      — Advanced pump score engine v3 (0–100, 10 components)
-  swapSimulator.py     — On-chain honeypot detection via eth_call
+  swapSimulator.py     — On-chain honeypot detection + proxy/stress/volatility (v5)
   mempoolService.py    — Mempool pending tx listener
   rugDetector.py       — Post-buy rug pull monitoring
   preLaunchDetector.py — Pre-launch token detection
-  smartMoneyTracker.py — Whale wallet tracking
-  devTracker.py        — Developer reputation tracker (v3)
+  smartMoneyTracker.py — Whale wallet tracking + whale activity analysis (v5)
+  devTracker.py        — Developer reputation tracker + ML reputation (v5)
   riskEngine.py        — Unified risk scoring engine (v3)
   tradeExecutor.py     — Backend trade execution engine (v3)
-  resourceMonitor.py   — Memory/CPU/WS/RPC monitoring (NEW v4)
-  alertService.py      — Telegram/Discord/Email alerts (NEW v4)
-  metricsService.py    — Performance metrics & P&L tracking (NEW v4)
+  resourceMonitor.py   — Memory/CPU/WS/RPC monitoring (v4)
+  alertService.py      — Telegram/Discord/Email alerts (v4)
+  metricsService.py    — Performance metrics & P&L tracking (v4)
+  mlPredictor.py       — ML pump/dump prediction + anomaly detection (NEW v5)
+  socialSentiment.py   — Multi-platform social sentiment analysis (NEW v5)
+  dynamicContractScanner.py — Continuous contract monitoring (NEW v5)
 
 Uses web3.py to interact with BSC (or other EVM chains) via WebSocket RPC.
 Runs as an async background task inside Django Channels.
@@ -52,6 +58,12 @@ from trading.Services.tradeExecutor import TradeExecutor, TradeResult
 from trading.Services.resourceMonitor import ResourceMonitor
 from trading.Services.alertService import AlertService
 from trading.Services.metricsService import MetricsService, TradeRecord, DetectionEvent
+# ── Professional v5 modules ──
+from trading.Services.swapSimulator import ProxyDetector, StressTester, VolatilitySlippageCalc
+from trading.Services.mlPredictor import PumpDumpPredictor, DevReputationML, AnomalyDetector
+from trading.Services.socialSentiment import SocialSentimentAnalyzer
+from trading.Services.dynamicContractScanner import DynamicContractScanner
+from trading.Services.smartMoneyTracker import WhaleAlert, WhaleActivity
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +315,59 @@ class TokenInfo:
     _dexscreener_ok: bool = False
     _coingecko_ok: bool = False
     _tokensniffer_ok: bool = False
+    # ── v5: Proxy Detection ──
+    proxy_is_proxy: bool = False
+    proxy_type: str = ""                    # transparent / uups / beacon / eip1167 / none
+    proxy_risk_level: str = "unknown"       # safe / moderate / dangerous
+    proxy_has_multisig: bool = False
+    proxy_has_timelock: bool = False
+    proxy_signals: list = field(default_factory=list)
+    _proxy_ok: bool = False
+    # ── v5: Stress Test ──
+    stress_max_safe_amount: float = 0.0     # max BNB/ETH for <10% slippage
+    stress_liquidity_depth: int = 0         # 0-100
+    stress_avg_slippage: float = 0.0
+    _stress_ok: bool = False
+    # ── v5: Volatility Slippage ──
+    volatility_score: float = 0.0
+    volatility_recommended_slippage: float = 12.0
+    _volatility_ok: bool = False
+    # ── v5: ML Pump/Dump Predictor ──
+    ml_pump_score: int = 0                  # 0-100
+    ml_pump_confidence: float = 0.0         # 0-1
+    ml_pump_label: str = "neutral"          # safe / neutral / warning / danger
+    _ml_pump_ok: bool = False
+    # ── v5: Social Sentiment ──
+    social_sentiment_score: int = 0         # 0-100
+    social_sentiment_label: str = ""        # strong / moderate / weak / none / suspicious
+    social_platforms_active: int = 0
+    social_signals: list = field(default_factory=list)
+    _social_ok: bool = False
+    # ── v5: Anomaly Detection ──
+    anomaly_is_anomalous: bool = False
+    anomaly_score: float = 0.0              # 0-1
+    anomaly_type: str = ""
+    _anomaly_ok: bool = False
+    # ── v5: Whale Activity ──
+    whale_total_buys: int = 0
+    whale_total_sells: int = 0
+    whale_net_flow: float = 0.0
+    whale_coordinated: bool = False
+    whale_dev_dumping: bool = False
+    whale_concentration_pct: float = 0.0
+    whale_risk_score: int = 50
+    whale_signals: list = field(default_factory=list)
+    _whale_ok: bool = False
+    # ── v5: Dynamic Contract Scanner ──
+    dynamic_scan_risk: int = 0
+    dynamic_scan_blocked: bool = False
+    dynamic_scan_block_reason: str = ""
+    dynamic_scan_alerts: list = field(default_factory=list)
+    _dynamic_scan_ok: bool = False
+    # ── v5: Dev ML ──
+    dev_ml_reputation: int = 50
+    dev_ml_cluster: str = "neutral"
+    dev_ml_confidence: float = 0.0
     # Overall
     risk: str = "unknown"
     risk_reasons: list = field(default_factory=list)
@@ -1045,6 +1110,17 @@ class SniperBot:
             "enable_trade_executor": False,  # backend trade execution (requires SNIPER_PRIVATE_KEY)
             "risk_engine_min_score": 50, # minimum risk engine score to buy
             "risk_engine_auto_action": "BUY",  # minimum action to auto-buy (STRONG_BUY / BUY)
+            # ── v5 Professional modules (toggles) ──
+            "enable_proxy_detector": True,       # proxy/upgradeable detection
+            "enable_stress_test": True,          # multi-amount slippage analysis
+            "enable_volatility_slippage": True,  # dynamic slippage from volatility
+            "enable_ml_predictor": True,         # ML pump/dump scoring
+            "enable_social_sentiment": True,     # social sentiment analysis
+            "enable_anomaly_detector": True,     # volume/holder anomaly detection
+            "enable_whale_activity": True,       # whale order analysis
+            "enable_dynamic_scanner": True,      # continuous contract monitoring
+            "ml_min_score": 30,                  # min ML pump score to buy
+            "social_min_score": 0,               # min social sentiment to buy (0 = disabled)
         }
 
         # State
@@ -1109,6 +1185,18 @@ class SniperBot:
         self.resource_monitor = ResourceMonitor()
         self.alert_service = AlertService()
         self.metrics_service = MetricsService()
+
+        # ── Professional v5 modules ──
+        self.proxy_detector = ProxyDetector(self.w3)
+        self.stress_tester = StressTester(
+            self.w3, self.router_addr, self.weth
+        ) if self.router_addr and self.weth else None
+        self.volatility_slippage = VolatilitySlippageCalc()
+        self.ml_predictor = PumpDumpPredictor()
+        self.anomaly_detector = AnomalyDetector()
+        self.social_sentiment = SocialSentimentAnalyzer()
+        self.dynamic_scanner = DynamicContractScanner(self.w3, chain_id)
+        self._dynamic_scanner_task: asyncio.Task | None = None
 
         # Background task handles for professional modules
         self._mempool_task: asyncio.Task | None = None
@@ -1360,6 +1448,60 @@ class SniperBot:
             "pump_lp_growth_score": info.pump_lp_growth_score,
             # Trade Executor availability
             "backend_buy_available": info.backend_buy_available,
+            # ── Professional v5 data ──
+            # Proxy Detection
+            "proxy_is_proxy": info.proxy_is_proxy,
+            "proxy_type": info.proxy_type,
+            "proxy_risk_level": info.proxy_risk_level,
+            "proxy_has_multisig": info.proxy_has_multisig,
+            "proxy_has_timelock": info.proxy_has_timelock,
+            "proxy_signals": list(info.proxy_signals),
+            "proxy_ok": info._proxy_ok,
+            # Stress Test
+            "stress_max_safe_amount": info.stress_max_safe_amount,
+            "stress_liquidity_depth": info.stress_liquidity_depth,
+            "stress_avg_slippage": info.stress_avg_slippage,
+            "stress_ok": info._stress_ok,
+            # Volatility Slippage
+            "volatility_score": info.volatility_score,
+            "volatility_recommended_slippage": info.volatility_recommended_slippage,
+            "volatility_ok": info._volatility_ok,
+            # ML Prediction
+            "ml_pump_score": info.ml_pump_score,
+            "ml_pump_confidence": info.ml_pump_confidence,
+            "ml_pump_label": info.ml_pump_label,
+            "ml_pump_ok": info._ml_pump_ok,
+            # Social Sentiment
+            "social_sentiment_score": info.social_sentiment_score,
+            "social_sentiment_label": info.social_sentiment_label,
+            "social_platforms_active": info.social_platforms_active,
+            "social_signals": list(info.social_signals),
+            "social_ok": info._social_ok,
+            # Anomaly Detection
+            "anomaly_is_anomalous": info.anomaly_is_anomalous,
+            "anomaly_score": info.anomaly_score,
+            "anomaly_type": info.anomaly_type,
+            "anomaly_ok": info._anomaly_ok,
+            # Whale Activity
+            "whale_total_buys": info.whale_total_buys,
+            "whale_total_sells": info.whale_total_sells,
+            "whale_net_flow": info.whale_net_flow,
+            "whale_coordinated": info.whale_coordinated,
+            "whale_dev_dumping": info.whale_dev_dumping,
+            "whale_concentration_pct": info.whale_concentration_pct,
+            "whale_risk_score": info.whale_risk_score,
+            "whale_signals": list(info.whale_signals),
+            "whale_ok": info._whale_ok,
+            # Dynamic Scanner
+            "dynamic_scan_risk": info.dynamic_scan_risk,
+            "dynamic_scan_blocked": info.dynamic_scan_blocked,
+            "dynamic_scan_block_reason": info.dynamic_scan_block_reason,
+            "dynamic_scan_alerts": list(info.dynamic_scan_alerts),
+            "dynamic_scan_ok": info._dynamic_scan_ok,
+            # Dev ML
+            "dev_ml_reputation": info.dev_ml_reputation,
+            "dev_ml_cluster": info.dev_ml_cluster,
+            "dev_ml_confidence": info.dev_ml_confidence,
         }
 
     # ─── Refresh detected tokens (periodic re-check) ───────
@@ -1780,6 +1922,168 @@ class SniperBot:
         except Exception as e:
             logger.error(f"v2+v3 analysis pipeline error for {token_info.symbol}: {e}")
 
+        # ── Professional v5: Advanced Intelligence ──────────────
+        try:
+            v5_tasks = []
+
+            # Proxy detection (async)
+            if self.settings.get("enable_proxy_detector", True):
+                v5_tasks.append(("proxy", asyncio.ensure_future(
+                    self.proxy_detector.analyze(new_token)
+                )))
+
+            # Stress test (multi-amount slippage)
+            if self.settings.get("enable_stress_test", True) and self.stress_tester:
+                v5_tasks.append(("stress", asyncio.ensure_future(
+                    self.stress_tester.stress_test(new_token)
+                )))
+
+            # ML Pump/Dump prediction (sync → wrap in executor)
+            if self.settings.get("enable_ml_predictor", True):
+                loop = asyncio.get_event_loop()
+                v5_tasks.append(("ml", asyncio.ensure_future(
+                    loop.run_in_executor(None, self.ml_predictor.predict, token_info)
+                )))
+
+            # Social sentiment (async HTTP calls)
+            if self.settings.get("enable_social_sentiment", True):
+                v5_tasks.append(("social", asyncio.ensure_future(
+                    self.social_sentiment.analyze(
+                        new_token,
+                        token_symbol=token_info.symbol,
+                        token_info=token_info,
+                    )
+                )))
+
+            # Anomaly detection (sync → wrap in executor)
+            if self.settings.get("enable_anomaly_detector", True):
+                loop = asyncio.get_event_loop()
+                v5_tasks.append(("anomaly", asyncio.ensure_future(
+                    loop.run_in_executor(None, self.anomaly_detector.detect, token_info)
+                )))
+
+            # Whale activity analysis
+            if self.settings.get("enable_whale_activity", True) and self.smart_money:
+                v5_tasks.append(("whale", asyncio.ensure_future(
+                    self.smart_money.analyze_whale_activity(
+                        new_token, pair_address,
+                        creator_address=token_info.creator_address,
+                        native_price_usd=self.native_price_usd,
+                    )
+                )))
+
+            # Volatility-based slippage (async, uses DexScreener data)
+            if self.settings.get("enable_volatility_slippage", True):
+                dex_data = {
+                    "price_change_m5": getattr(token_info, 'dexscreener_price_change_m5', 0),
+                    "price_change_h1": getattr(token_info, 'dexscreener_price_change_h1', 0),
+                    "price_change_h6": getattr(token_info, 'dexscreener_price_change_h6', 0),
+                }
+                v5_tasks.append(("volatility", asyncio.ensure_future(
+                    self.volatility_slippage.calculate(new_token, dexscreener_data=dex_data)
+                )))
+
+            if v5_tasks:
+                v5_results = await asyncio.gather(
+                    *[t[1] for t in v5_tasks], return_exceptions=True
+                )
+                for (label, _), result in zip(v5_tasks, v5_results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"v5 {label} failed for {token_info.symbol}: {result}")
+                        continue
+
+                    if label == "proxy" and result:
+                        token_info.proxy_is_proxy = result.is_proxy
+                        token_info.proxy_type = result.proxy_type
+                        token_info.proxy_risk_level = result.risk_level
+                        token_info.proxy_has_multisig = result.has_multisig
+                        token_info.proxy_has_timelock = result.has_timelock
+                        token_info.proxy_signals = result.signals
+                        token_info._proxy_ok = True
+
+                    elif label == "stress" and result:
+                        token_info.stress_max_safe_amount = result.max_safe_amount_wei / 10**18 if result.max_safe_amount_wei else 0
+                        token_info.stress_liquidity_depth = result.liquidity_depth_score
+                        token_info.stress_avg_slippage = result.avg_slippage_pct
+                        token_info._stress_ok = True
+
+                    elif label == "ml" and result:
+                        token_info.ml_pump_score = result.ml_score
+                        token_info.ml_pump_confidence = result.confidence
+                        # Derive label from score (no label field on PumpDumpPrediction)
+                        if result.ml_score >= 70:
+                            token_info.ml_pump_label = "safe"
+                        elif result.ml_score >= 40:
+                            token_info.ml_pump_label = "neutral"
+                        elif result.ml_score >= 20:
+                            token_info.ml_pump_label = "warning"
+                        else:
+                            token_info.ml_pump_label = "danger"
+                        token_info._ml_pump_ok = True
+
+                    elif label == "social" and result:
+                        token_info.social_sentiment_score = result.sentiment_score
+                        token_info.social_sentiment_label = result.sentiment_label
+                        token_info.social_platforms_active = result.platforms_active
+                        token_info.social_signals = result.signals
+                        token_info._social_ok = True
+
+                    elif label == "anomaly" and result:
+                        token_info.anomaly_is_anomalous = result.is_anomalous
+                        token_info.anomaly_score = result.anomaly_score
+                        token_info.anomaly_type = result.anomaly_type
+                        token_info._anomaly_ok = True
+
+                    elif label == "whale" and result:
+                        token_info.whale_total_buys = result.total_whale_buys
+                        token_info.whale_total_sells = result.total_whale_sells
+                        token_info.whale_net_flow = result.net_whale_flow
+                        token_info.whale_coordinated = result.coordinated_buying
+                        token_info.whale_dev_dumping = result.dev_dumping
+                        token_info.whale_concentration_pct = result.whale_concentration_pct
+                        token_info.whale_risk_score = result.risk_score
+                        token_info.whale_signals = result.signals
+                        token_info._whale_ok = True
+
+                    elif label == "volatility" and result:
+                        token_info.volatility_score = result.volatility_score
+                        token_info.volatility_recommended_slippage = result.recommended_slippage_pct
+                        token_info._volatility_ok = True
+
+                # v5: Dev ML fields (from the dev_result already obtained in v3)
+                if dev_result and hasattr(dev_result, 'ml_reputation_score'):
+                    token_info.dev_ml_reputation = dev_result.ml_reputation_score
+                    token_info.dev_ml_cluster = dev_result.ml_cluster
+                    token_info.dev_ml_confidence = dev_result.ml_confidence
+
+                # v5: Register with dynamic scanner for continuous monitoring
+                if self.settings.get("enable_dynamic_scanner", True):
+                    try:
+                        await self.dynamic_scanner.register(
+                            new_token,
+                            symbol=token_info.symbol,
+                            pair_address=pair_address,
+                            is_proxy=token_info.proxy_is_proxy,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Dynamic scanner registration failed: {e}")
+
+                # Re-emit with v5 data
+                await self._emit("token_detected",
+                    self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
+                )
+                logger.info(
+                    f"v5 analysis for {token_info.symbol}: "
+                    f"proxy={token_info.proxy_type}({token_info.proxy_risk_level}) "
+                    f"stress_depth={token_info.stress_liquidity_depth} "
+                    f"ml={token_info.ml_pump_score}({token_info.ml_pump_label}) "
+                    f"social={token_info.social_sentiment_score}({token_info.social_sentiment_label}) "
+                    f"anomaly={token_info.anomaly_score:.2f} "
+                    f"whale_flow={token_info.whale_net_flow:.2f}"
+                )
+        except Exception as e:
+            logger.error(f"v5 analysis pipeline error for {token_info.symbol}: {e}")
+
         # Check if safe enough
         passes_safety = True
         if self.settings["only_safe"] and token_info.risk == "danger":
@@ -1905,6 +2209,41 @@ class SniperBot:
             elif current_idx > allowed_idx:
                 passes_safety = False
                 logger.info(f"Skipping {token_info.symbol}: risk action {token_info.risk_engine_action} below threshold {allowed_action}")
+
+        # ── Professional v5 safety gates ──
+        # Proxy danger gate
+        if token_info._proxy_ok and token_info.proxy_risk_level == "dangerous":
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: proxy danger — {token_info.proxy_type} without multisig/timelock")
+
+        # Dynamic scanner blocked gate
+        if token_info._dynamic_scan_ok and token_info.dynamic_scan_blocked:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: dynamic scanner blocked — {token_info.dynamic_scan_block_reason}")
+
+        # ML pump/dump gate
+        if token_info._ml_pump_ok and self.settings.get("enable_ml_predictor", True):
+            ml_min = self.settings.get("ml_min_score", 30)
+            if token_info.ml_pump_label == "danger":
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: ML dump prediction (score={token_info.ml_pump_score})")
+            elif token_info.ml_pump_score < ml_min:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: ML score {token_info.ml_pump_score} < {ml_min}")
+
+        # Anomaly detection gate
+        if token_info._anomaly_ok and token_info.anomaly_is_anomalous and token_info.anomaly_score >= 0.8:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: severe anomaly detected (score={token_info.anomaly_score:.2f}, type={token_info.anomaly_type})")
+
+        # Whale dev-dump gate
+        if token_info._whale_ok and token_info.whale_dev_dumping:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: dev wallet dumping detected")
+
+        # Whale coordinated buying – warning but not block (can be a good sign)
+        if token_info._whale_ok and token_info.whale_coordinated:
+            logger.info(f"⚠️ {token_info.symbol}: coordinated whale buying detected")
 
         if passes_safety:
             # Auto-calculate max_hold from LP lock duration (sell 1h before expiry)
@@ -2333,6 +2672,28 @@ class SniperBot:
         if v3_modules:
             await self._emit("scan_info", {"message": f"⚡ v3 modules: {', '.join(v3_modules)}"})
 
+        # ── Professional v5: module startup ──
+        v5_modules = []
+        if self.settings.get("enable_proxy_detector", True):
+            v5_modules.append("ProxyDetector")
+        if self.settings.get("enable_stress_test", True) and self.stress_tester:
+            v5_modules.append("StressTester")
+        if self.settings.get("enable_volatility_slippage", True):
+            v5_modules.append("VolatilitySlippage")
+        if self.settings.get("enable_ml_predictor", True):
+            v5_modules.append("ML-PumpDump")
+        if self.settings.get("enable_social_sentiment", True):
+            v5_modules.append("SocialSentiment")
+        if self.settings.get("enable_anomaly_detector", True):
+            v5_modules.append("AnomalyDetector")
+        if self.settings.get("enable_whale_activity", True):
+            v5_modules.append("WhaleActivity")
+        if self.settings.get("enable_dynamic_scanner", True):
+            self._dynamic_scanner_task = asyncio.ensure_future(self.dynamic_scanner.run())
+            v5_modules.append("DynamicScanner(bg)")
+        if v5_modules:
+            await self._emit("scan_info", {"message": f"🧠 v5 modules: {', '.join(v5_modules)}"})
+
         price_tick = 0
         enrich_tick = 0           # Fast enrichment cycle (every ~3s)
         slow_tick = 0              # Full refresh cycle (every ~15s)
@@ -2606,6 +2967,11 @@ class SniperBot:
     def stop(self):
         """Stop the bot."""
         self.running = False
+        # v5: stop dynamic scanner
+        if hasattr(self, 'dynamic_scanner'):
+            self.dynamic_scanner.stop()
+        if hasattr(self, '_dynamic_scanner_task') and self._dynamic_scanner_task:
+            self._dynamic_scanner_task.cancel()
 
     def update_settings(self, new_settings: dict):
         """Update bot settings from frontend."""
@@ -2668,6 +3034,20 @@ class SniperBot:
             if hasattr(self, 'metrics_service'):
                 state["metrics_stats"] = self.metrics_service.get_stats()
                 state["metrics_dashboard"] = self.metrics_service.get_dashboard()
+        except Exception:
+            pass
+        # v5 module stats
+        try:
+            if hasattr(self, 'dynamic_scanner'):
+                state["dynamic_scanner_stats"] = {
+                    "monitored": len(self.dynamic_scanner._contracts),
+                    "running": self.dynamic_scanner.running,
+                }
+            if hasattr(self, 'ml_predictor'):
+                state["ml_predictor_stats"] = {
+                    "predictions": self.ml_predictor._total_predictions if hasattr(self.ml_predictor, '_total_predictions') else 0,
+                    "online_samples": len(self.ml_predictor._outcome_buffer) if hasattr(self.ml_predictor, '_outcome_buffer') else 0,
+                }
         except Exception:
             pass
         return state

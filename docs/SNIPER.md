@@ -1,6 +1,6 @@
 # Sniper Bot — Documentación Técnica
 
-Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: detección automática de nuevos tokens en BSC/ETH, análisis multi-capa con 5 APIs + 12 módulos profesionales, y ejecución de trades con 18 capas de protección.
+Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: detección automática de nuevos tokens en BSC/ETH, análisis multi-capa con 5 APIs + 16 módulos profesionales (incluye ML, sentimiento social, escaneo dinámico), y ejecución de trades con 22 capas de protección.
 
 ---
 
@@ -30,34 +30,39 @@ Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: dete
 ┌────────────────────┐     ┌─────────────────────────┐     ┌──────────────────┐
 │   sniper.html      │◄────│   sniperConsumer.py      │◄────│  SniperBot       │
 │   pageSniper.js    │────►│   (WebSocket bridge)     │────►│  sniperService   │
-│   (1,862 + 519 ln) │     │   (146 líneas)           │     │  (2,738 líneas)  │
+│   (2,166 + 519 ln) │     │   (146 líneas)           │     │  (3,103 líneas)  │
 └────────────────────┘     └─────────────────────────┘     └──────┬───────────┘
                                                                   │
                            ┌──────────────────────────────────────┤
                            │                                      │
                     ┌──────▼──────┐  ┌────────────────┐  ┌───────▼────────┐
                     │ ContractAn. │  │ PumpAnalyzer   │  │ SwapSimulator  │
-                    │ (5 APIs)    │  │ v3 (10 comp)   │  │ + Bytecode     │
+                    │ (5 APIs)    │  │ v3 (10 comp)   │  │ v5 +Proxy/Stress│
                     └─────────────┘  └────────────────┘  └────────────────┘
                            │                │                     │
                     ┌──────▼──────┐  ┌──────▼─────────┐  ┌───────▼────────┐
                     │ RiskEngine  │  │ DevTracker     │  │ MempoolService │
-                    │ v3 (unified)│  │ v3 (reputation)│  │ (pending txs)  │
+                    │ v3 (unified)│  │ v5 (+ML reputa)│  │ (pending txs)  │
                     └─────────────┘  └────────────────┘  └────────────────┘
                            │                │                     │
                     ┌──────▼──────┐  ┌──────▼─────────┐  ┌───────▼────────┐
                     │ TradeExec.  │  │ SmartMoney     │  │ PreLaunch Det. │
-                    │ v3 (backend)│  │ (whale track)  │  │ (pre-listing)  │
+                    │ v3 (backend)│  │ v5 (+whale act)│  │ (pre-listing)  │
                     └─────────────┘  └────────────────┘  └────────────────┘
                            │                │                     │
                     ┌──────▼──────┐  ┌──────▼─────────┐  ┌───────▼────────┐
                     │ RugDetector │  │ AlertService   │  │ MetricsService │
                     │ (post-buy)  │  │ v4 (multi-ch)  │  │ v4 (P&L track) │
                     └─────────────┘  └────────────────┘  └────────────────┘
+                           │                │                     │
+                    ┌──────▼──────┐  ┌──────▼─────────┐  ┌───────▼────────┐
+                    │ ResourceMon.│  │ MLPredictor    │  │ SocialSentim.  │
+                    │ v4 (CPU/RPC)│  │ v5 (pump/dev)  │  │ v5 (4 platafs) │
+                    └─────────────┘  └────────────────┘  └────────────────┘
                                             │
                                      ┌──────▼─────────┐
-                                     │ ResourceMon.   │
-                                     │ v4 (CPU/RPC)   │
+                                     │ DynContractScan│
+                                     │ v5 (continuo)  │
                                      └────────────────┘
 ```
 
@@ -65,21 +70,24 @@ Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: dete
 
 | Archivo | Líneas | Rol |
 |---|---|---|
-| `Services/sniperService.py` | 2,738 | Motor principal: `ContractAnalyzer` + `SniperBot` + enrichment + scan loop |
-| `Services/pumpAnalyzer.py` | 597 | Scoring con 10 componentes ponderados |
+| `Services/sniperService.py` | 3,103 | Motor principal: `ContractAnalyzer` + `SniperBot` + enrichment + scan loop |
+| `Services/swapSimulator.py` | 1,084 | Simulación on-chain + bytecode + proxy + stress + volatilidad |
+| `Services/smartMoneyTracker.py` | 650+ | Tracking de wallets rentables + whale activity analysis |
+| `Services/mlPredictor.py` | 621 | **v5** ML: pump/dump predictor, dev reputation ML, anomaly detector |
 | `Services/tradeExecutor.py` | 611 | Ejecución backend con private key |
-| `Services/swapSimulator.py` | 485 | Simulación on-chain + bytecode analysis |
+| `Services/socialSentiment.py` | 604 | **v5** Sentimiento social: Twitter/Telegram/Discord/Reddit |
+| `Services/pumpAnalyzer.py` | 597 | Scoring con 10 componentes ponderados |
+| `Services/devTracker.py` | 582 | Reputación del deployer + ML reputation blending |
+| `Services/dynamicContractScanner.py` | 512 | **v5** Escaneo continuo de contratos con scoring dinámico |
 | `Services/riskEngine.py` | 444 | Motor unificado de riesgo (7 señales → 0-100) |
-| `Services/devTracker.py` | 435 | Reputación del deployer (historial) |
 | `Services/rugDetector.py` | 417 | Monitoreo post-compra continuo |
 | `Services/alertService.py` | 404 | Multi-canal: Telegram/Discord/Email |
 | `Services/mempoolService.py` | 394 | Listener de transacciones pendientes |
 | `Services/preLaunchDetector.py` | 358 | Detección antes de listing |
-| `Services/smartMoneyTracker.py` | 339 | Tracking de wallets rentables |
 | `Services/metricsService.py` | 329 | P&L tracking, win rate, series temporales |
 | `Services/resourceMonitor.py` | 211 | CPU/RAM/WebSocket/RPC metrics |
 | `WebSocket/sniperConsumer.py` | 146 | Bridge Django Channels ↔ Frontend |
-| `static/js/pageSniper.js` | 1,862 | Lógica frontend completa con dedup |
+| `static/js/pageSniper.js` | 2,166 | Lógica frontend completa con dedup + v5 UI |
 | `templates/sniper.html` | 519 | UI del Sniper Bot |
 | `static/css/main.css` | 2,569 | Estilos Binance dark theme |
 
@@ -135,11 +143,16 @@ while self.running:
    e. TokenSniffer API
 4. Calcular pump_score (PumpAnalyzer v3, 10 componentes)
 5. Swap simulation + bytecode analysis (SwapSimulator)
-6. Dev reputation (DevTracker v3)
-7. Risk scoring (RiskEngine v3)
-8. 18 capas de seguridad → SAFE / UNSAFE / UNKNOWN
-9. Emit `token_detected` via WebSocket
-10. Si Auto-Buy ON + pasa 18 gates → emit `snipe_opportunity`
+6. Proxy detection + stress test + volatility slippage (SwapSimulator v5)
+7. Dev reputation (DevTracker v5 + ML reputation blending)
+8. ML pump/dump prediction + anomaly detection (MLPredictor v5)
+9. Social sentiment analysis — Twitter/Telegram/Discord/Reddit (SocialSentiment v5)
+10. Whale activity analysis (SmartMoneyTracker v5)
+11. Risk scoring (RiskEngine v3)
+12. 22 capas de seguridad → SAFE / UNSAFE / UNKNOWN
+13. Dynamic contract scanner registration (DynamicContractScanner v5)
+14. Emit `token_detected` via WebSocket
+15. Si Auto-Buy ON + pasa 22 gates → emit `snipe_opportunity`
 ```
 
 ---
@@ -210,9 +223,9 @@ except Exception:
 
 ---
 
-### 3.2 SwapSimulator (`swapSimulator.py` — 485 líneas)
+### 3.2 SwapSimulator v5 (`swapSimulator.py` — 1,084 líneas)
 
-Simula compra/venta on-chain vía `eth_call` (sin gastar gas) y analiza el bytecode del contrato.
+Simula compra/venta on-chain vía `eth_call` (sin gastar gas), analiza el bytecode del contrato, y en v5 añade **proxy detection**, **stress testing** y **volatility-aware slippage**.
 
 #### Funciones principales
 
@@ -221,6 +234,9 @@ Simula compra/venta on-chain vía `eth_call` (sin gastar gas) y analiza el bytec
 | `simulate_swap()` | Simula buy + sell del token vía PancakeSwap V2 Router |
 | `analyze_bytecode()` | Lee el bytecode del contrato y busca opcodes peligrosos |
 | `full_analysis()` | Ejecuta ambos análisis y devuelve resultado combinado |
+| `ProxyDetector.analyze()` | **v5** Detecta proxy upgradeable, implementation slot, admin slot |
+| `StressTester.stress_test()` | **v5** Multi-amount stress test (0.01-10 BNB) con tax consistency |
+| `VolatilitySlippageCalc.calculate()` | **v5** Slippage dinámico basado en volatilidad (DexScreener) |
 
 #### Bytecode analysis — Opcodes detectados
 
@@ -249,6 +265,70 @@ Simula compra/venta on-chain vía `eth_call` (sin gastar gas) y analiza el bytec
         'risk_level': 'MEDIUM',
         'warnings': ['DELEGATECALL detected'],
     }
+}
+```
+
+#### v5 — Proxy Detection (`ProxyDetector`)
+
+Detecta si un contrato es un proxy upgradeable (potencialmente peligroso):
+
+| Check | Descripción |
+|---|---|
+| EIP-1967 slots | Busca implementation slot (`0x360894...`) y admin slot (`0xb531...`) |
+| Storage slots | Lee storage slot 0/1/2 para detectar implementation address |
+| Bytecode patterns | Busca `DELEGATECALL` como indicador de proxy |
+| Transparent proxy | Detecta patrón de proxy transparente con admin |
+
+```python
+# ProxyAnalysis dataclass
+{
+    'is_proxy': True,
+    'proxy_type': 'EIP-1967 Transparent',
+    'implementation_address': '0x...',
+    'admin_address': '0x...',
+    'risk_level': 'high',  # low/medium/high/critical
+    'warnings': ['Implementation can be changed by admin']
+}
+```
+
+#### v5 — Stress Testing (`StressTester`)
+
+Simula swaps con múltiples montos para detectar tax inconsistencies:
+
+```python
+# Montos de prueba: [0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0] BNB
+# Para cada monto:
+#   1. Simula buy + sell via eth_call
+#   2. Calcula buy_tax y sell_tax
+#   3. Detecta si tax cambia con el monto (honeypot pattern)
+
+# StressTestResult dataclass
+{
+    'token_address': '0x...',
+    'results': [...],           # Lista de resultados por monto
+    'tax_consistent': True,     # ¿Tax es igual para todos los montos?
+    'max_buy_tax': 5.2,
+    'max_sell_tax': 8.1,
+    'risk_level': 'low',
+}
+```
+
+#### v5 — Volatility-Aware Slippage (`VolatilitySlippageCalc`)
+
+Calcula slippage óptimo basado en la volatilidad real del token:
+
+```python
+# Inputs: DexScreener price changes (m5, h1, h6)
+# Cálculo: volatility_score (0-100) basado en magnitud de cambios
+# recommended_slippage_pct: 5% (baja vol) a 25% (alta vol)
+
+# VolatilitySlippage dataclass
+{
+    'volatility_score': 45.0,       # 0-100 (más alto = más volátil)
+    'recommended_slippage_pct': 12.0,
+    'price_change_m5': -2.3,
+    'price_change_h1': 15.7,
+    'price_change_h6': 42.1,
 }
 ```
 
@@ -313,9 +393,9 @@ Detecta tokens ANTES de que aparezcan en PancakeSwap:
 
 ---
 
-### 3.6 SmartMoneyTracker (`smartMoneyTracker.py` — 339 líneas)
+### 3.6 SmartMoneyTracker v5 (`smartMoneyTracker.py` — 650+ líneas)
 
-Trackea wallets históricamente rentables:
+Trackea wallets históricamente rentables y en v5 añade **whale activity analysis**:
 
 | Métrica | Descripción |
 |---|---|
@@ -323,14 +403,48 @@ Trackea wallets históricamente rentables:
 | Avg ROI | ROI promedio por trade |
 | Activity | Frecuencia de compras recientes |
 | Portfolio Score | Score compuesto de la wallet |
+| **Whale Activity** | **v5** Análisis de actividad de ballenas en un token |
 
 Cuando una wallet "smart money" compra un token nuevo → señal de compra positiva para el scoring.
 
+#### v5 — Whale Activity Analysis
+
+Analiza transacciones de ballenas para detectar patrones sospechosos:
+
+```python
+# WhaleActivity dataclass
+{
+    'token_address': '0x...',
+    'whale_alerts': [
+        WhaleAlert(
+            tx_hash='0x...',
+            whale_address='0x...',
+            action='buy',        # buy/sell/transfer
+            amount_usd=50000.0,
+            timestamp=1719...,
+            is_suspicious=False
+        )
+    ],
+    'total_whale_buys': 3,
+    'total_whale_sells': 1,
+    'net_whale_flow_usd': 120000.0,  # positivo = más compras
+    'whale_concentration': 15.2,      # % del supply en ballenas
+    'risk_level': 'low'              # low/medium/high/critical
+}
+```
+
+| Señal | Riesgo | Descripción |
+|---|---|---|
+| Net flow negativo | 🟡 MEDIO | Ballenas vendiendo más que comprando |
+| Concentración >30% | 🔴 ALTO | Demasiado supply en pocas wallets |
+| Dev es whale + venta | 🔴 CRÍTICO | Deployer vendiendo su posición |
+| Multiple whale buys correlated | 🟡 MEDIO | Wash trading pattern |
+
 ---
 
-### 3.7 DevTracker v3 (`devTracker.py` — 435 líneas)
+### 3.7 DevTracker v5 (`devTracker.py` — 582 líneas)
 
-Analiza la reputación del deployer del contrato:
+Analiza la reputación del deployer del contrato. En v5 integra **ML reputation blending** via `MLPredictor.DevReputationML`:
 
 | Señal | Impacto |
 |---|---|
@@ -339,6 +453,8 @@ Analiza la reputación del deployer del contrato:
 | 3/5 tokens anteriores exitosos | 🟢 Dev legítimo (+bonus score) |
 | Wallet nueva (<1 semana) | 🟡 Sin historial |
 | >$100k en balance | 🟢 Skin in the game |
+| **ML cluster = "scammer"** | 🔴 **v5** ML detecta patrón de scammer |
+| **ML cross_wallet_risk > 0.7** | 🟡 **v5** Wallets vinculadas sospechosas |
 
 #### Scoring
 
@@ -348,11 +464,35 @@ reputation = {
     'total_tokens_deployed': 8,
     'rug_count': 2,
     'success_count': 4,
-    'reputation_score': 58,         # 0-100
+    'reputation_score': 58,         # 0-100 (blended con ML si enable_ml=True)
     'is_serial_scammer': False,     # True si rug_count >= 3
     'risk_level': 'MEDIUM',
-    'wallet_age_days': 45
+    'wallet_age_days': 45,
+    'ml_reputation_score': 52,      # v5: ML-based score
+    'ml_cluster': 'unknown',        # v5: ML cluster (scammer/neutral/legit/unknown)
+    'ml_cross_wallet_risk': 0.3,    # v5: Cross-wallet funding risk
 }
+```
+
+#### v5 — ML Reputation Blending
+
+Cuando `enable_ml=True`, el score final combina el scoring tradicional con ML:
+
+```python
+# Traditional score (basado en historial on-chain)
+traditional_score = self._calculate_traditional_score(dev_profile)
+
+# ML score (basado en patrones de comportamiento)
+ml_result = self._ml_predictor.predict(dev_profile, dev_check_result)
+
+# Blending: 70% tradicional + 30% ML
+final_score = int(traditional_score * 0.7 + ml_result.ml_reputation_score * 0.3)
+
+# Señales adicionales de ML
+if ml_result.cluster == "scammer":
+    signals.append("🔴 ML detecta patrón de scammer")
+if ml_result.cross_wallet_risk > 0.7:
+    signals.append("🟡 Riesgo de wallets vinculadas")
 ```
 
 ---
@@ -540,6 +680,190 @@ Tracking de rendimiento del bot.
 
 ---
 
+### 3.13 MLPredictor v5 (`mlPredictor.py` — 621 líneas)
+
+Módulo de Machine Learning con 3 sub-modelos para predicción avanzada.
+
+#### 3.13.1 PumpDumpPredictor
+
+Predice la probabilidad de pump o dump basado en features on-chain:
+
+```python
+# Features extraídas:
+# - liquidity_usd, holder_count, buy_sell_ratio
+# - top_holder_pct, is_verified, buy_tax, sell_tax
+# - has_proxy, has_mint, lp_lock_pct
+# - smart_money_buys, smart_money_sells
+# - holder_growth_rate
+
+# PumpDumpPrediction dataclass
+{
+    'token_address': '0x...',
+    'pump_probability': 0.72,   # 0.0-1.0
+    'dump_probability': 0.28,   # 0.0-1.0
+    'ml_score': 72,             # 0-100 (pump_probability * 100)
+    'confidence': 0.85,         # 0.0-1.0
+    'features_used': 14,
+    'model_version': '1.0'
+}
+```
+
+| ml_score | Label derivado | Significado |
+|---|---|---|
+| ≥ 70 | SAFE | Alta probabilidad de pump saludable |
+| 40-69 | NEUTRAL | Señales mixtas |
+| 20-39 | WARNING | Señales de precaución |
+| < 20 | DANGER | Alta probabilidad de dump/scam |
+
+#### 3.13.2 DevReputationML
+
+Analiza patrones de comportamiento del deployer con ML:
+
+```python
+# DevReputationPrediction dataclass
+{
+    'wallet_address': '0x...',
+    'ml_reputation_score': 52,  # 0-100
+    'cluster': 'unknown',       # scammer/neutral/legit/unknown
+    'cross_wallet_risk': 0.3,   # 0.0-1.0 (riesgo de wallets vinculadas)
+}
+```
+
+#### 3.13.3 AnomalyDetector
+
+Detecta anomalías en el comportamiento del token:
+
+```python
+# AnomalyResult dataclass
+{
+    'token_address': '0x...',
+    'is_anomalous': True,       # True si anomalies ≥ 2 o total_score > 0.5
+    'anomaly_type': 'volume_spike',  # Tipo principal de anomalía
+    'total_score': 0.65,        # 0.0-1.0 (score compuesto)
+    'anomalies': [              # Lista de anomalías detectadas
+        {'type': 'volume_spike', 'score': 0.4, 'details': '...'},
+        {'type': 'buy_sell_ratio_anomaly', 'score': 0.25, 'details': '...'}
+    ]
+}
+```
+
+| Anomalía | Trigger | Score |
+|---|---|---|
+| `volume_spike` | Volumen > 5× liquidez | 0.4 |
+| `buy_sell_ratio_anomaly` | Ratio buy/sell > 10 o < 0.1 | 0.25 |
+| `holder_concentration` | Top holder > 50% | 0.35 |
+| `price_manipulation` | Cambio m5 > 50% o < -30% | 0.3 |
+
+---
+
+### 3.14 SocialSentimentAnalyzer v5 (`socialSentiment.py` — 604 líneas)
+
+Analiza sentimiento social en 4 plataformas: Twitter, Telegram, Discord y Reddit.
+
+```python
+# SocialSentimentResult dataclass
+{
+    'token_address': '0x...',
+    'sentiment_score': 50,      # 0-100 (50 = neutral)
+    'sentiment_label': 'neutral', # positive/neutral/negative/unknown
+    'mentions_count': 23,
+    'platforms_analyzed': 4,
+    'platform_scores': {
+        'twitter': 65,
+        'telegram': 42,
+        'discord': 55,
+        'reddit': 38
+    },
+    'trending': False,          # True si mentions > threshold
+    'warnings': []              # Alertas de sentimiento
+}
+```
+
+| sentiment_score | Label | Significado |
+|---|---|---|
+| ≥ 70 | positive | Sentimiento muy positivo — posible hype |
+| 40-69 | neutral | Sentimiento mixto o insuficiente data |
+| < 40 | negative | Sentimiento negativo — precaución |
+
+#### Keyword detection
+
+Busca keywords positivos y negativos por plataforma:
+- **Positivos**: "moon", "gem", "100x", "bullish", "pump", "airdrop"
+- **Negativos**: "scam", "rug", "honeypot", "dump", "fake", "avoid"
+
+---
+
+### 3.15 DynamicContractScanner v5 (`dynamicContractScanner.py` — 512 líneas)
+
+Escaneo continuo en background de contratos registrados con scoring dinámico.
+
+#### Flujo
+
+```
+1. register(token_address) → agrega a lista de monitoreo
+2. Cada 30s: toma snapshot del contrato
+   a. Lee total_supply, owner, balances
+   b. Compara con snapshot anterior
+   c. Detecta cambios sospechosos
+3. Si cambio peligroso → block(token) + emit alerta
+4. unregister(token) cuando se vende o expira
+```
+
+#### ContractSnapshot
+
+```python
+{
+    'token_address': '0x...',
+    'total_supply': 1000000000,
+    'owner': '0x...',
+    'top_holder_pct': 15.2,
+    'timestamp': 1719...,
+    'score': 75,                    # Score dinámico 0-100
+    'changes_detected': [],
+    'risk_level': 'low'
+}
+```
+
+#### Cambios monitoreados
+
+| Cambio | Severidad | Acción |
+|---|---|---|
+| Owner cambió | 🟡 MEDIO | Warning en WebSocket |
+| Total supply aumentó >10% | 🔴 ALTO | Block token + alerta |
+| Top holder concentración subió | 🟡 MEDIO | Reduce score |
+| Contrato se auto-destruyó | 🔴 CRÍTICO | Emergency sell + block |
+| Implementation cambió (proxy) | 🔴 ALTO | Block + alerta |
+
+#### API
+
+```python
+# Registrar token para monitoreo continuo
+await scanner.register(token_address, symbol="TOKEN", pair_address="0x...", is_proxy=False)
+
+# Verificar si token está bloqueado
+is_blocked, reason = scanner.is_blocked(token_address)
+
+# Des-registrar token
+scanner.unregister(token_address)
+```
+
+---
+
+### 3.16 Nuevas Safety Gates v5
+
+Las 22 capas de protección incluyen 4 gates adicionales en v5:
+
+| # | Gate | Módulo | Trigger de bloqueo |
+|---|---|---|---|
+| 19 | ML Pump/Dump | MLPredictor | ml_score < 20 (DANGER) |
+| 20 | Anomaly Detection | MLPredictor | is_anomalous = True con score > 0.7 |
+| 21 | Social Sentiment | SocialSentiment | sentiment_score < 25 (muy negativo) |
+| 22 | Dynamic Scanner | DynContractScanner | is_blocked = True |
+
+Estas gates se evalúan DESPUÉS de las 18 gates originales y ANTES de emitir `snipe_opportunity`.
+
+---
+
 ## 4. APIs de seguridad
 
 ### 4.1 GoPlus Security API
@@ -641,7 +965,7 @@ Calculado por `RiskEngine.analyze()`. Ver sección 3.8.
 
 ### 5.3 Safety Assessment
 
-La clasificación final SAFE/UNSAFE/UNKNOWN se basa en las 18 capas:
+La clasificación final SAFE/UNSAFE/UNKNOWN se basa en las 22 capas:
 
 ```python
 # SAFE si:
@@ -659,6 +983,14 @@ La clasificación final SAFE/UNSAFE/UNKNOWN se basa en las 18 capas:
 # - No hard stops de RiskEngine
 # - Swap simulation exitosa
 # - No SELFDESTRUCT/DELEGATECALL en bytecode
+# - Proxy analysis risk_level != "critical"           (v5)
+# - Stress test tax_consistent = True                 (v5)
+# - ML pump/dump ml_score >= 20                       (v5)
+# - Anomaly detector is_anomalous = False             (v5)
+# - Social sentiment_score >= 25                      (v5)
+# - Dynamic scanner is_blocked = False                (v5)
+# - Whale activity risk_level != "critical"           (v5)
+# - Volatility slippage applied correctly             (v5)
 
 # UNSAFE si falla alguna condición crítica
 # UNKNOWN si no hay suficiente data
@@ -748,7 +1080,7 @@ elif hours_held >= max_hold_hours - 1:
 | `status_update` | `{state, blocks, tokens, rpc_url}` | Cada ciclo de scan |
 | `token_detected` | `{token_data completo}` | Nuevo token encontrado |
 | `token_updated` | `{token_address, updated_fields}` | Enrichment cambió datos |
-| `snipe_opportunity` | `{token_data, reason}` | Token pasa 18 gates |
+| `snipe_opportunity` | `{token_data, reason}` | Token pasa 22 gates |
 | `mempool_event` | `{type, from, to, value}` | Evento mempool relevante |
 | `error` | `{message}` | Error del bot |
 | `resource_metrics` | `{cpu, ram, rpc, ws}` | Cada 30s |
@@ -973,19 +1305,20 @@ STABLECOINS = {'0x55d398326f99059fF775485246999027B3197955', ...}  # USDT, USDC,
 python manage.py test trading.tests -v 2
 ```
 
-### 130 tests en 7 archivos
+### 166 tests en 8 archivos
 
 | Archivo | Tests | Cobertura |
 |---|---|---|
+| `test_v5_modules.py` | 36 | **v5** ML predictor, social sentiment, proxy, stress, volatility, anomaly, scanner |
 | `test_sniperService.py` | 36 | Bot init, settings, state management, chains |
 | `test_alertService.py` | 27 | Events, rate limiting, send, formatting |
-| `test_devTracker.py` | 16 | Reputation, serial scammer, scoring |
+| `test_devTracker.py` | 16 | Reputation, serial scammer, scoring, ML blending |
 | `test_resourceMonitor.py` | 16 | CPU, WS, RPC tracking, snapshots |
 | `test_pumpAnalyzer.py` | 15 | 10 components, grades, stats |
 | `test_riskEngine.py` | 14 | Weights, hard stops, classification |
 | `test_rugDetector.py` | 6 | Alert levels, trigger conditions |
 
-**Total: 130 tests — OK (0.402s)**
+**Total: 166 tests — OK (1.986s)**
 
 ---
 
@@ -1027,4 +1360,4 @@ python manage.py test trading.tests -v 2
 
 ---
 
-*Última actualización: Junio 2025 — v4 (12 módulos, 130 tests, 18 capas)*
+*Última actualización: Junio 2025 — v5 (16 módulos, 166 tests, 22 capas, ML + Social + Dynamic Scanner)*

@@ -71,7 +71,7 @@ DEFAULT_CONFIG = {
     "telegram_bot_token": os.environ.get("SNIPER_TELEGRAM_TOKEN", ""),
     "telegram_chat_id": os.environ.get("SNIPER_TELEGRAM_CHAT_ID", ""),
     # ── Discord ──
-    "discord_enabled": False,
+    "discord_enabled": bool(os.environ.get("SNIPER_DISCORD_WEBHOOK", "")),
     "discord_webhook_url": os.environ.get("SNIPER_DISCORD_WEBHOOK", ""),
     # ── Email ──
     "email_enabled": False,

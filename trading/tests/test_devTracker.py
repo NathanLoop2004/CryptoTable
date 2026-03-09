@@ -91,7 +91,7 @@ class TestDevTracker(unittest.TestCase):
     def setUp(self):
         self.w3_mock = MagicMock(spec=Web3)
         self.w3_mock.eth = MagicMock()
-        self.tracker = DevTracker(self.w3_mock, 56)
+        self.tracker = DevTracker(self.w3_mock, 56, enable_ml=False)
 
     def _run(self, coro):
         loop = asyncio.new_event_loop()

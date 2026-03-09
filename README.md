@@ -1,6 +1,6 @@
 # TradingWeb — Plataforma de Trading + Sniper Bot
 
-Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 12 módulos profesionales** (pump scoring 10 componentes, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking, dev reputation, unified risk engine, backend trade executor, resource monitoring, alerts multi-canal, performance metrics), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls con **18 capas de seguridad**.
+Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 16 módulos profesionales** (pump scoring 10 componentes, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking, dev reputation, unified risk engine, backend trade executor, resource monitoring, alerts multi-canal, performance metrics, **ML predictor, social sentiment, dynamic contract scanner, proxy/stress/volatility analysis**), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls con **22 capas de seguridad**.
 
 ---
 
@@ -99,7 +99,7 @@ Debería mostrar: `System check identified no issues.`
 python manage.py test trading.tests -v 2
 ```
 
-130 tests automatizados cubriendo todos los módulos.
+130 tests automatizados cubriendo todos los módulos (iniciales) + 36 tests v5 = **166 tests totales**.
 
 ---
 
@@ -150,32 +150,45 @@ http://127.0.0.1:8000/
 
 ## 🎯 Sniper Bot — Resumen
 
-### Pipeline completo (v4)
+### Pipeline completo (v5)
 
 ```
 Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5 APIs)
 → Pump Analyzer (10 comp) → Swap Simulator → Bytecode → Smart Money
-→ Dev Tracker → Risk Engine → Buy Gating (18 capas) → snipe_opportunity
+→ Dev Tracker (+ ML reputation) → Risk Engine → v5 Parallel Pipeline:
+  ├─ Proxy Detection (upgradeable / timelock / multisig)
+  ├─ Stress Test (multi-amount slippage curve)
+  ├─ ML Pump/Dump Predictor (feature-weighted scoring + online learning)
+  ├─ Social Sentiment (Twitter/Telegram/Discord/Reddit)
+  ├─ Anomaly Detection (volume spike / holder explosion / buy-sell ratio)
+  ├─ Whale Activity Analysis (coordinated buying / dev dumping)
+  └─ Volatility Slippage (dynamic recommendation)
+→ Dynamic Contract Scanner (background continuous monitoring)
+→ Buy Gating (22 capas) → snipe_opportunity
 → Auto-Buy (ethers.js) → P&L Monitor → Rug Detector → Auto-Sell (TP/SL/Time)
 → Resource Monitor → Alert Service → Metrics Dashboard
 ```
 
-### 12 Módulos Profesionales
+### 16 Módulos Profesionales
 
-| Módulo | Archivo | Líneas | Versión | Descripción |
-|---|---|---|---|---|
-| 🚀 Pump Analyzer | `pumpAnalyzer.py` | 597 | v3 | Scoring 0-100 con **10** componentes ponderados |
-| 🧪 Swap Simulator | `swapSimulator.py` | 485 | v2 | Simulación on-chain buy+sell vía `eth_call` + bytecode |
-| 📡 Mempool Service | `mempoolService.py` | 394 | v2 | Escucha txs pendientes 10-30s antes de confirmación |
-| 🛡️ Rug Detector | `rugDetector.py` | 417 | v2 | Monitoreo post-compra: LP drain, tax increase, dev sell |
-| 🔍 Pre-Launch | `preLaunchDetector.py` | 358 | v2 | Detecta tokens antes de listing (contract + router) |
-| 🐋 Smart Money | `smartMoneyTracker.py` | 339 | v2 | Trackea wallets rentables y señales de compra |
-| 👨‍💻 Dev Tracker | `devTracker.py` | 435 | v3 | Reputación del deployer (historial de éxitos/rugs) |
-| 🎯 Risk Engine | `riskEngine.py` | 444 | v3 | Motor unificado de decisión (7 componentes → 0-100) |
-| ⚡ Trade Executor | `tradeExecutor.py` | 611 | v3 | Ejecución backend con private key + multi-RPC |
-| 📊 Resource Monitor | `resourceMonitor.py` | 211 | v4 | CPU/RAM/WS/RPC metrics en tiempo real |
-| 🔔 Alert Service | `alertService.py` | 404 | v4 | Alertas Telegram + Discord + Email + rate limiting |
-| 📈 Metrics Service | `metricsService.py` | 329 | v4 | P&L tracking, win rate, detection speed, hourly series |
+| Módulo | Archivo | Versión | Descripción |
+|---|---|---|---|
+| 🚀 Pump Analyzer | `pumpAnalyzer.py` | v3 | Scoring 0-100 con **10** componentes ponderados |
+| 🧪 Swap Simulator | `swapSimulator.py` | v5 | Simulación on-chain + **proxy detection** + **stress test** + **volatility slippage** |
+| 📡 Mempool Service | `mempoolService.py` | v2 | Escucha txs pendientes 10-30s antes de confirmación |
+| 🛡️ Rug Detector | `rugDetector.py` | v2 | Monitoreo post-compra: LP drain, tax increase, dev sell |
+| 🔍 Pre-Launch | `preLaunchDetector.py` | v2 | Detecta tokens antes de listing (contract + router) |
+| 🐋 Smart Money | `smartMoneyTracker.py` | v5 | Whale tracking + **whale activity analysis** (coordinated/dev dump) |
+| 👨‍💻 Dev Tracker | `devTracker.py` | v5 | Reputación + **ML clustering** (legit/suspicious/scammer) |
+| 🎯 Risk Engine | `riskEngine.py` | v3 | Motor unificado de decisión (7 componentes → 0-100) |
+| ⚡ Trade Executor | `tradeExecutor.py` | v3 | Ejecución backend con private key + multi-RPC |
+| 📊 Resource Monitor | `resourceMonitor.py` | v4 | CPU/RAM/WS/RPC metrics en tiempo real |
+| 🔔 Alert Service | `alertService.py` | v4 | Alertas Telegram + Discord + Email + rate limiting |
+| 📈 Metrics Service | `metricsService.py` | v4 | P&L tracking, win rate, detection speed, hourly series |
+| 🤖 ML Predictor | `mlPredictor.py` | v5 | **Pump/Dump predictor** + **dev reputation ML** + **anomaly detector** |
+| 📱 Social Sentiment | `socialSentiment.py` | v5 | **Multi-platform sentiment** (Twitter/Telegram/Discord/Reddit) |
+| 🔬 Dynamic Scanner | `dynamicContractScanner.py` | v5 | **Continuous contract monitoring** (bytecode/tax/owner changes) |
+| 🧬 Wallet Service | `walletService.py` | v1 | Wallet logic |
 
 **Motor principal:** `sniperService.py` — **2,738 líneas** (ContractAnalyzer + SniperBot + main loop + enrichment)
 
@@ -208,7 +221,7 @@ Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5
 
 Cada componente tiene try/except individual con fallback neutral (40) — un componente que falla NO rompe el score total.
 
-### 18 capas de seguridad anti rug-pull
+### 22 capas de seguridad anti rug-pull
 
 ```
  1. 5 APIs de seguridad → detecta 18+ flags peligrosos
@@ -229,6 +242,10 @@ Cada componente tiene try/except individual con fallback neutral (40) — un com
 16. Bytecode Analysis → detecta SELFDESTRUCT / DELEGATECALL
 17. Rug Detector → monitoreo post-compra (LP drain, dev sell)
 18. Risk Engine → score unificado 0-100 con hard stops
+19. v5: Proxy Danger Gate → bloquea proxy sin multisig/timelock
+20. v5: ML Pump/Dump Gate → bloquea si ML score < 30 o "danger"
+21. v5: Anomaly Gate → bloquea si anomaly score ≥ 0.8
+22. v5: Whale Dev-Dump Gate → bloquea si dev wallet dumping detected
 ```
 
 ### Enrichment inteligente (anti-spam)
@@ -276,20 +293,23 @@ TradingWeb/
 │   │   ├── urls.py                 # URL patterns de la app
 │   │   └── walletRouter.py         # Rutas API wallet
 │   │
-│   ├── Services/                   # 12 módulos profesionales + core
-│   │   ├── sniperService.py        # 🎯 Motor del Sniper Bot (2,738 líneas)
+│   ├── Services/                   # 16 módulos profesionales + core
+│   │   ├── sniperService.py        # 🎯 Motor del Sniper Bot (~3,100 líneas)
 │   │   ├── pumpAnalyzer.py         # 🚀 Pump scoring engine v3 (597 líneas)
-│   │   ├── swapSimulator.py        # 🧪 Swap simulation + bytecode (485 líneas)
+│   │   ├── swapSimulator.py        # 🧪 Swap sim + proxy/stress/volatility v5 (~1,084 líneas)
 │   │   ├── mempoolService.py       # 📡 Mempool listener (394 líneas)
 │   │   ├── rugDetector.py          # 🛡️ Post-buy rug detection (417 líneas)
 │   │   ├── preLaunchDetector.py    # 🔍 Pre-launch detection (358 líneas)
-│   │   ├── smartMoneyTracker.py    # 🐋 Smart money tracking (339 líneas)
-│   │   ├── devTracker.py           # 👨‍💻 Dev reputation v3 (435 líneas)
+│   │   ├── smartMoneyTracker.py    # 🐋 Smart money + whale activity v5 (~650 líneas)
+│   │   ├── devTracker.py           # 👨‍💻 Dev reputation + ML v5 (~582 líneas)
 │   │   ├── riskEngine.py           # 🎯 Risk engine v3 (444 líneas)
 │   │   ├── tradeExecutor.py        # ⚡ Trade executor v3 (611 líneas)
 │   │   ├── resourceMonitor.py      # 📊 Resource monitor v4 (211 líneas)
 │   │   ├── alertService.py         # 🔔 Alert service v4 (404 líneas)
 │   │   ├── metricsService.py       # 📈 Metrics service v4 (329 líneas)
+│   │   ├── mlPredictor.py          # 🤖 ML predictor v5 (~620 líneas) [NEW]
+│   │   ├── socialSentiment.py      # 📱 Social sentiment v5 (~604 líneas) [NEW]
+│   │   ├── dynamicContractScanner.py # 🔬 Dynamic scanner v5 (~512 líneas) [NEW]
 │   │   └── walletService.py        # Wallet logic (139 líneas)
 │   │
 │   ├── WebSocket/
@@ -315,14 +335,15 @@ TradingWeb/
 │   │   ├── transactions.html       # Transacciones (123 líneas)
 │   │   └── login.html              # Login Trust Wallet (63 líneas)
 │   │
-│   └── tests/                      # 130 tests automatizados
+│   └── tests/                      # 166 tests automatizados
 │       ├── test_sniperService.py   # 36 tests — bot init, settings, state
 │       ├── test_alertService.py    # 27 tests — events, rate limiting, send
 │       ├── test_riskEngine.py      # 14 tests — weights, hard stops, scoring
 │       ├── test_devTracker.py      # 16 tests — reputation, serial scammer
 │       ├── test_pumpAnalyzer.py    # 15 tests — 10 components, stats
 │       ├── test_resourceMonitor.py # 16 tests — CPU, WS, RPC tracking
-│       └── test_rugDetector.py     # 6 tests — alert levels, triggers
+│       ├── test_rugDetector.py     # 6 tests — alert levels, triggers
+│       └── test_v5_modules.py      # 36 tests — ML, proxy, social, scanner [NEW]
 │
 ├── docs/
 │   ├── SNIPER.md                   # Documentación técnica del Sniper Bot
@@ -332,7 +353,7 @@ TradingWeb/
     └── sniper_alerts.log
 ```
 
-**Totales:** ~17,000 líneas de código fuente (backend + frontend + tests + styles + templates)
+**Totales:** ~22,000+ líneas de código fuente (backend + frontend + tests + styles + templates)
 
 ---
 
@@ -379,6 +400,14 @@ El bot usa RPCs públicos (sin API key) con rotación automática y backoff expo
 | `enable_prelaunch` | ❌ | Pre-launch detection (experimental) |
 | `enable_smart_money` | ❌ | Smart money tracking (experimental) |
 | `enable_trade_executor` | ❌ | Backend execution (requiere private key) |
+| `enable_proxy_detector` | ✅ | v5: Deep proxy/upgradeable analysis |
+| `enable_stress_test` | ✅ | v5: Multi-amount slippage curve |
+| `enable_volatility_slippage` | ✅ | v5: Dynamic slippage from volatility |
+| `enable_ml_predictor` | ✅ | v5: ML pump/dump prediction |
+| `enable_social_sentiment` | ✅ | v5: Multi-platform social analysis |
+| `enable_anomaly_detector` | ✅ | v5: Unusual activity detection |
+| `enable_whale_activity` | ✅ | v5: Whale buy/sell/concentration |
+| `enable_dynamic_scanner` | ✅ | v5: Continuous contract monitoring |
 
 ### User Profiles (1-click)
 

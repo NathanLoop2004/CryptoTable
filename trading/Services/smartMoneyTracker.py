@@ -1,15 +1,21 @@
 """
-smartMoneyTracker.py — Smart Money / Whale Wallet Tracking.
+smartMoneyTracker.py — Smart Money / Whale Wallet Tracking (v5).
 
 Tracks wallets that consistently buy early in successful pumps and copies
 their movements. Also monitors known "smart money" wallets for activity.
 
-Features:
+Features (v1-v4):
   - Tracks wallets that bought the same token before/after a pump
   - Scores wallets by historical success rate
   - Alerts when a tracked wallet buys a new token
   - Maintains a rolling database of "profitable wallets"
   - Cross-references with detected tokens for copy-trading signals
+
+v5 Enhancements:
+  - Real-time whale suspicious order detection (large pending swaps)
+  - Unusual accumulation pattern detection
+  - Dev dump detection (creator selling large amounts)
+  - Cross-whale coordination alerts (multiple whales buying simultaneously)
 
 Integration:
   Runs in background, analyzing trade history of detected tokens.
@@ -98,6 +104,46 @@ class SmartMoneySignal:
     amount_native: float = 0
     timestamp: float = 0
     confidence: int = 0                # 0-100
+
+
+@dataclass
+class WhaleAlert:
+    """Alert for suspicious whale activity on a token."""
+    token_address: str
+    alert_type: str = ""               # "large_buy" | "large_sell" | "dev_dump" | "coordinated" | "accumulation"
+    wallet_address: str = ""
+    wallet_label: str = ""
+    amount_native: float = 0.0
+    amount_usd: float = 0.0
+    tx_hash: str = ""
+    is_suspicious: bool = False
+    severity: str = "info"             # "info" | "warning" | "danger"
+    description: str = ""
+    timestamp: float = 0.0
+
+    def to_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class WhaleActivity:
+    """Aggregated whale analysis for a token."""
+    token_address: str
+    total_whale_buys: int = 0
+    total_whale_sells: int = 0
+    net_whale_flow: float = 0.0        # positive = net buying, negative = net selling
+    largest_buy_native: float = 0.0
+    largest_sell_native: float = 0.0
+    coordinated_buying: bool = False   # multiple whales buying within same time window
+    dev_dumping: bool = False          # creator/dev selling aggressively
+    whale_concentration_pct: float = 0.0  # % of buys from top wallets
+    alerts: list = field(default_factory=list)  # list of WhaleAlert
+    risk_score: int = 50               # 0-100 (100 = safe, 0 = very suspicious)
+    signals: list = field(default_factory=list)
+    timestamp: float = 0.0
+
+    def to_dict(self):
+        return asdict(self)
 
     def to_dict(self):
         return asdict(self)
@@ -403,6 +449,212 @@ class SmartMoneyTracker:
             "running": self.running,
             "top_wallets": self.get_top_wallets(5),
         }
+
+    # ── v5: Whale Suspicious Order Detection ────────────────
+
+    async def analyze_whale_activity(self, token_address: str,
+                                      pair_address: str,
+                                      creator_address: str = "",
+                                      native_price_usd: float = 0) -> WhaleActivity:
+        """
+        Analyze recent whale activity for a token to detect suspicious patterns.
+
+        Checks:
+          - Large individual buys/sells (>1 BNB/ETH)
+          - Dev wallet dumping
+          - Coordinated whale buying (multiple wallets buying within 5 blocks)
+          - Net whale flow direction
+        """
+        result = WhaleActivity(
+            token_address=token_address,
+            timestamp=time.time(),
+        )
+        loop = asyncio.get_event_loop()
+
+        try:
+            token_cs = Web3.to_checksum_address(token_address)
+            pair_cs = Web3.to_checksum_address(pair_address) if pair_address else None
+
+            current_block = await loop.run_in_executor(
+                None, lambda: self.w3.eth.block_number
+            )
+
+            # Get recent Swap events from the pair (last ~200 blocks ≈ 10min on BSC)
+            from_block = max(0, current_block - 200)
+
+            if not pair_cs:
+                result.signals.append("⚠️ No pair address — no se puede analizar actividad whale")
+                return result
+
+            logs = await loop.run_in_executor(
+                None,
+                lambda: self.w3.eth.get_logs({
+                    "fromBlock": from_block,
+                    "toBlock": current_block,
+                    "address": pair_cs,
+                    "topics": [SWAP_TOPIC],
+                }),
+            )
+
+            # Parse swap events: detect large buys/sells
+            buys_by_wallet: dict[str, list] = {}
+            sells_by_wallet: dict[str, list] = {}
+            buy_blocks: list[int] = []
+
+            WHALE_THRESHOLD_WEI = 10**18  # 1 BNB/ETH
+
+            for log_entry in logs[:500]:
+                try:
+                    topics = log_entry.get("topics", [])
+                    if len(topics) < 3:
+                        continue
+
+                    sender = "0x" + topics[1].hex()[-40:]
+                    to_addr = "0x" + topics[2].hex()[-40:]
+                    data = log_entry.get("data", b"")
+                    block_num = log_entry.get("blockNumber", 0)
+
+                    if isinstance(data, bytes):
+                        data_hex = data.hex()
+                    else:
+                        data_hex = str(data).replace("0x", "")
+
+                    # Decode Swap event data: amount0In, amount1In, amount0Out, amount1Out
+                    if len(data_hex) >= 256:
+                        a0_in = int(data_hex[0:64], 16)
+                        a1_in = int(data_hex[64:128], 16)
+                        a0_out = int(data_hex[128:192], 16)
+                        a1_out = int(data_hex[192:256], 16)
+
+                        # Determine if buy or sell (depends on which token is WETH)
+                        # Buy: WETH in → tokens out
+                        # Sell: tokens in → WETH out
+                        is_buy = (a0_in > 0 or a1_in > 0) and (a0_out > 0 or a1_out > 0)
+                        weth_amount = max(a0_in, a1_in, a0_out, a1_out)
+
+                        if weth_amount >= WHALE_THRESHOLD_WEI:
+                            amount_native = weth_amount / 10**18
+                            amount_usd = amount_native * native_price_usd if native_price_usd else 0
+
+                            if a0_in > 0 or a1_in > 0:
+                                # Someone sent WETH → buying tokens
+                                to_lower = to_addr.lower()
+                                buys_by_wallet.setdefault(to_lower, []).append({
+                                    "amount": amount_native,
+                                    "amount_usd": amount_usd,
+                                    "block": block_num,
+                                })
+                                buy_blocks.append(block_num)
+                                result.total_whale_buys += 1
+                                result.net_whale_flow += amount_native
+
+                                if amount_native > result.largest_buy_native:
+                                    result.largest_buy_native = amount_native
+
+                                # Create alert for large buy
+                                alert = WhaleAlert(
+                                    token_address=token_address,
+                                    alert_type="large_buy",
+                                    wallet_address=to_addr,
+                                    amount_native=amount_native,
+                                    amount_usd=amount_usd,
+                                    severity="info",
+                                    description=f"Whale buy: {amount_native:.2f} native (${amount_usd:,.0f})",
+                                    timestamp=time.time(),
+                                )
+                                result.alerts.append(alert)
+                            else:
+                                # Someone received WETH → selling tokens
+                                sender_lower = sender.lower()
+                                sells_by_wallet.setdefault(sender_lower, []).append({
+                                    "amount": amount_native,
+                                    "amount_usd": amount_usd,
+                                    "block": block_num,
+                                })
+                                result.total_whale_sells += 1
+                                result.net_whale_flow -= amount_native
+
+                                if amount_native > result.largest_sell_native:
+                                    result.largest_sell_native = amount_native
+
+                except Exception:
+                    continue
+
+            # ── Dev dump detection ──
+            if creator_address:
+                creator_lower = creator_address.lower()
+                if creator_lower in sells_by_wallet:
+                    dev_sells = sells_by_wallet[creator_lower]
+                    total_dev_sell = sum(s["amount"] for s in dev_sells)
+                    result.dev_dumping = True
+                    result.risk_score -= 30
+
+                    alert = WhaleAlert(
+                        token_address=token_address,
+                        alert_type="dev_dump",
+                        wallet_address=creator_address,
+                        amount_native=total_dev_sell,
+                        is_suspicious=True,
+                        severity="danger",
+                        description=f"⛔ DEV DUMP: {total_dev_sell:.2f} native vendidos por el creador",
+                        timestamp=time.time(),
+                    )
+                    result.alerts.append(alert)
+                    result.signals.append(f"🚨 Dev dump detectado: {total_dev_sell:.2f} native vendidos")
+
+            # ── Coordinated buying detection ──
+            if buy_blocks and len(set(buys_by_wallet.keys())) >= 3:
+                # Check if multiple unique wallets bought within 5 blocks of each other
+                buy_blocks_sorted = sorted(buy_blocks)
+                window_size = 5
+                for i in range(len(buy_blocks_sorted) - 2):
+                    if buy_blocks_sorted[i + 2] - buy_blocks_sorted[i] <= window_size:
+                        result.coordinated_buying = True
+                        result.signals.append(
+                            f"⚠️ Compra coordinada: 3+ wallets compraron en {window_size} bloques"
+                        )
+                        result.risk_score -= 10
+                        break
+
+            # ── Whale concentration ──
+            total_buy_volume = sum(
+                sum(b["amount"] for b in buys)
+                for buys in buys_by_wallet.values()
+            )
+            if total_buy_volume > 0 and buys_by_wallet:
+                top_buyer_volume = max(
+                    sum(b["amount"] for b in buys)
+                    for buys in buys_by_wallet.values()
+                )
+                result.whale_concentration_pct = round(
+                    (top_buyer_volume / total_buy_volume) * 100, 1
+                )
+                if result.whale_concentration_pct > 50:
+                    result.signals.append(
+                        f"⚠️ Top whale tiene {result.whale_concentration_pct:.0f}% del volumen de compra"
+                    )
+                    result.risk_score -= 10
+
+            # ── Net flow analysis ──
+            if result.net_whale_flow > 0:
+                result.signals.append(
+                    f"🐋 Net whale flow: +{result.net_whale_flow:.2f} native (comprando)"
+                )
+            elif result.net_whale_flow < 0:
+                result.signals.append(
+                    f"🐋 Net whale flow: {result.net_whale_flow:.2f} native (vendiendo)"
+                )
+                if result.net_whale_flow < -5:
+                    result.risk_score -= 15
+
+            # Final risk score
+            result.risk_score = max(0, min(100, result.risk_score))
+
+        except Exception as e:
+            logger.debug(f"Whale activity analysis error for {token_address}: {e}")
+            result.signals.append(f"Error: {str(e)[:80]}")
+
+        return result
 
     def stop(self):
         self.running = False

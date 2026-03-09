@@ -468,6 +468,68 @@
       ${data.pump_lp_growth_percent != null && data.pump_lp_growth_percent !== 0 ? `<div>LP Growth: <span style="color:${data.pump_lp_growth_percent>=0?'#02c076':'#e74c3c'}">${data.pump_lp_growth_percent>0?'+':''}${data.pump_lp_growth_percent.toFixed(1)}%</span></div>` : ''}
       ${data.pump_lp_growth_score > 0 ? `<div>LP Score: ${data.pump_lp_growth_score}/100</div>` : ''}
     </div>` : ''}
+    ${data.proxy_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🔐 Proxy Detection (v5)</div>
+      <div>Is Proxy: ${data.proxy_is_proxy ? '<span style="color:#e74c3c">SÍ</span>' : '<span style="color:#02c076">NO ✓</span>'}</div>
+      ${data.proxy_type ? `<div>Type: <strong>${data.proxy_type}</strong></div>` : ''}
+      <div>Risk: <strong style="color:${data.proxy_risk_level==='safe'?'#02c076':data.proxy_risk_level==='moderate'?'#f0b90b':'#e74c3c'}">${data.proxy_risk_level}</strong></div>
+      <div>${data.proxy_has_multisig ? '✅' : '❌'} Multisig</div>
+      <div>${data.proxy_has_timelock ? '✅' : '❌'} Timelock</div>
+      ${(data.proxy_signals||[]).map(s => `<div>📌 ${s}</div>`).join('')}
+    </div>` : ''}
+    ${data.stress_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">💪 Stress Test (v5)</div>
+      <div>Max Safe: <strong>${(data.stress_max_safe_amount||0).toFixed(3)}</strong> native</div>
+      <div>Liq Depth: <strong style="color:${data.stress_liquidity_depth>=60?'#02c076':data.stress_liquidity_depth>=30?'#f0b90b':'#e74c3c'}">${data.stress_liquidity_depth}/100</strong></div>
+      <div>Avg Slippage: ${(data.stress_avg_slippage||0).toFixed(1)}%</div>
+    </div>` : ''}
+    ${data.volatility_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">📈 Volatility (v5)</div>
+      <div>Score: <strong>${(data.volatility_score||0).toFixed(2)}</strong></div>
+      <div>Slippage rec: <strong style="color:#f0b90b">${(data.volatility_recommended_slippage||12).toFixed(1)}%</strong></div>
+    </div>` : ''}
+    ${data.ml_pump_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🤖 ML Predictor (v5)</div>
+      <div>Score: <strong style="color:${data.ml_pump_score>=70?'#02c076':data.ml_pump_score>=40?'#f0b90b':'#e74c3c'}">${data.ml_pump_score}/100</strong></div>
+      <div>Label: <strong style="color:${data.ml_pump_label==='safe'?'#02c076':data.ml_pump_label==='neutral'?'#f0b90b':'#e74c3c'}">${data.ml_pump_label}</strong></div>
+      <div>Confidence: ${((data.ml_pump_confidence||0)*100).toFixed(0)}%</div>
+    </div>` : ''}
+    ${data.social_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">📱 Social Sentiment (v5)</div>
+      <div>Score: <strong style="color:${data.social_sentiment_score>=60?'#02c076':data.social_sentiment_score>=30?'#f0b90b':'#e74c3c'}">${data.social_sentiment_score}/100</strong></div>
+      <div>Label: <strong>${data.social_sentiment_label || '—'}</strong></div>
+      <div>Platforms: <strong>${data.social_platforms_active || 0}</strong></div>
+      ${(data.social_signals||[]).slice(0,4).map(s => `<div>📌 ${s}</div>`).join('')}
+    </div>` : ''}
+    ${data.anomaly_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🔍 Anomaly Detection (v5)</div>
+      <div>Anomalous: ${data.anomaly_is_anomalous ? '<span style="color:#e74c3c;font-weight:700">SÍ ⚠️</span>' : '<span style="color:#02c076">NO ✓</span>'}</div>
+      <div>Score: <strong style="color:${data.anomaly_score>=0.7?'#e74c3c':data.anomaly_score>=0.4?'#f0b90b':'#02c076'}">${(data.anomaly_score||0).toFixed(2)}</strong></div>
+      ${data.anomaly_type ? `<div>⚠️ ${data.anomaly_type}</div>` : ''}
+    </div>` : ''}
+    ${data.whale_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🐋 Whale Activity (v5)</div>
+      <div>Buys: <span style="color:#02c076">${data.whale_total_buys||0}</span> | Sells: <span style="color:#e74c3c">${data.whale_total_sells||0}</span></div>
+      <div>Net Flow: <strong style="color:${data.whale_net_flow>=0?'#02c076':'#e74c3c'}">${data.whale_net_flow>=0?'+':''}${(data.whale_net_flow||0).toFixed(2)}</strong> native</div>
+      ${data.whale_coordinated ? '<div style="color:#f0b90b;font-weight:700">⚠️ Compra coordinada</div>' : ''}
+      ${data.whale_dev_dumping ? '<div style="color:#e74c3c;font-weight:700">⛔ DEV DUMPING</div>' : ''}
+      <div>Concentración: ${(data.whale_concentration_pct||0).toFixed(0)}%</div>
+      ${(data.whale_signals||[]).slice(0,4).map(s => `<div>📌 ${s}</div>`).join('')}
+    </div>` : ''}
+    ${data.dev_ml_cluster && data.dev_ml_cluster !== 'neutral' ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🧬 Dev ML (v5)</div>
+      <div>Cluster: <strong style="color:${data.dev_ml_cluster==='legit_dev'?'#02c076':data.dev_ml_cluster==='suspicious'?'#f0b90b':'#e74c3c'}">${data.dev_ml_cluster}</strong></div>
+      <div>ML Rep: <strong>${data.dev_ml_reputation||50}/100</strong></div>
+      <div>Confidence: ${((data.dev_ml_confidence||0)*100).toFixed(0)}%</div>
+    </div>` : ''}
     ${data.backend_buy_available ? `
     <div class="tlc-section">
       <div class="tlc-title">⚡ Backend Executor</div>
@@ -963,9 +1025,18 @@
                 updateDashboard(data);
                 break;
 
-            case "alert_config_updated":
+            case "alert_config_updated": {
                 addFeed("🔔 Alert config updated.", "system");
+                // Sync toggles with server state
+                const ac = data;
+                const tgT = $("alert-telegram"), dcT = $("alert-discord"), emT = $("alert-email");
+                if (tgT && ac.telegram_enabled !== undefined) tgT.checked = ac.telegram_enabled;
+                if (dcT && ac.discord_enabled  !== undefined) dcT.checked = ac.discord_enabled;
+                if (emT && ac.email_enabled    !== undefined) emT.checked = ac.email_enabled;
+                const dcRow = $("discord-webhook-row");
+                if (dcRow) dcRow.style.display = ac.discord_enabled ? "flex" : "none";
                 break;
+            }
         }
     }
 
@@ -991,6 +1062,17 @@
             if (setMaxConcurrent) setMaxConcurrent.value = state.settings.max_concurrent || 5;
             if (setBlockRange)    setBlockRange.value    = state.settings.block_range || 5;
             if (setPollInterval)  setPollInterval.value  = state.settings.poll_interval || 1.5;
+        }
+
+        // Sync alert toggles from server state
+        if (state.alert_stats && state.alert_stats.channels) {
+            const ch = state.alert_stats.channels;
+            const tgT = $("alert-telegram"), dcT = $("alert-discord"), emT = $("alert-email");
+            if (tgT && ch.telegram !== undefined) tgT.checked = ch.telegram;
+            if (dcT && ch.discord  !== undefined) dcT.checked = ch.discord;
+            if (emT && ch.email    !== undefined) emT.checked = ch.email;
+            const dcRow = $("discord-webhook-row");
+            if (dcRow) dcRow.style.display = ch.discord ? "flex" : "none";
         }
 
         // Replay detected pairs into table
@@ -2040,19 +2122,36 @@
         const telegramToggle = $("alert-telegram");
         const discordToggle  = $("alert-discord");
         const emailToggle    = $("alert-email");
+        const discordWebhookRow = $("discord-webhook-row");
+        const discordWebhookUrl = $("discord-webhook-url");
+
+        // Show/hide webhook URL input when Discord toggle changes
+        function updateDiscordUI() {
+            if (discordWebhookRow) {
+                discordWebhookRow.style.display = discordToggle && discordToggle.checked ? "flex" : "none";
+            }
+        }
 
         function syncAlertConfig() {
+            updateDiscordUI();
             const config = {
                 telegram_enabled: telegramToggle ? telegramToggle.checked : false,
                 discord_enabled:  discordToggle  ? discordToggle.checked  : false,
                 email_enabled:    emailToggle    ? emailToggle.checked    : false,
             };
+            // Include webhook URL if provided from the UI
+            if (discordWebhookUrl && discordWebhookUrl.value.trim()) {
+                config.discord_webhook_url = discordWebhookUrl.value.trim();
+            }
             sendWS({ action: "update_alert_config", config });
         }
 
         if (telegramToggle) telegramToggle.addEventListener("change", syncAlertConfig);
         if (discordToggle)  discordToggle.addEventListener("change", syncAlertConfig);
         if (emailToggle)    emailToggle.addEventListener("change", syncAlertConfig);
+        if (discordWebhookUrl) discordWebhookUrl.addEventListener("change", syncAlertConfig);
+
+        updateDiscordUI();
     }
 
     // Dashboard refresh button

@@ -107,6 +107,11 @@ class DevCheckResult:
     rug_pulls: int = 0
     best_multiplier: float = 0.0
     is_serial_scammer: bool = False     # 3+ rug pulls
+    # v5: ML reputation fields
+    ml_reputation_score: int = 50       # 0–100 ML-predicted reputation
+    ml_cluster: str = "neutral"         # legit_dev / neutral / suspicious / scammer
+    ml_confidence: float = 0.0          # 0–1 confidence
+    ml_linked_wallets: int = 0          # wallets linked via funding graph
     signals: list = field(default_factory=list)
 
     def to_dict(self):
@@ -140,16 +145,27 @@ class DevTracker:
         tracker.record_launch_outcome(token_address, creator, outcome_data)
     """
 
-    def __init__(self, w3: Web3, chain_id: int):
+    def __init__(self, w3: Web3, chain_id: int, enable_ml: bool = True):
         self.w3 = w3
         self.chain_id = chain_id
         self.running = False
+        self.enable_ml = enable_ml
 
         # Dev profiles indexed by address (lowercase)
         self._devs: dict[str, DevProfile] = {}
 
         # Token → creator mapping cache
         self._token_creators: dict[str, str] = {}
+
+        # v5: ML Reputation predictor
+        self._ml_predictor = None
+        if self.enable_ml:
+            try:
+                from trading.Services.mlPredictor import DevReputationML
+                self._ml_predictor = DevReputationML()
+                logger.info("DevTracker: ML reputation predictor enabled")
+            except Exception as e:
+                logger.warning(f"DevTracker: ML predictor unavailable: {e}")
 
         # Load known devs
         for addr, (label, dtype) in KNOWN_DEVS.items():
@@ -235,6 +251,47 @@ class DevTracker:
             self._devs[creator_lower] = profile
             result.dev_score = 50  # neutral for unknown devs
             result.signals.append("🆕 Developer nuevo — sin historial")
+
+        # v5: ML reputation prediction
+        if self._ml_predictor and profile:
+            try:
+                ml_result = self._ml_predictor.predict(profile)
+                result.ml_reputation_score = ml_result.ml_reputation_score
+                result.ml_cluster = ml_result.cluster
+                result.ml_confidence = ml_result.cross_wallet_risk
+                # Count linked wallets from funding graph
+                wallet_lower = profile.wallet.lower() if hasattr(profile, 'wallet') else ""
+                linked = self._ml_predictor._funding_graph.get(wallet_lower, set())
+                result.ml_linked_wallets = len(linked)
+
+                if ml_result.cluster == "scammer":
+                    result.signals.append(
+                        f"🤖 ML: SCAMMER detectado (score {ml_result.ml_reputation_score}, "
+                        f"pattern {ml_result.pattern_score})"
+                    )
+                elif ml_result.cluster == "suspicious":
+                    result.signals.append(
+                        f"🤖 ML: Dev sospechoso (score {ml_result.ml_reputation_score}, "
+                        f"pattern {ml_result.pattern_score})"
+                    )
+                elif ml_result.cluster == "legit_dev":
+                    result.signals.append(
+                        f"🤖 ML: Dev legítimo (score {ml_result.ml_reputation_score}, "
+                        f"pattern {ml_result.pattern_score})"
+                    )
+
+                if result.ml_linked_wallets > 0:
+                    result.signals.append(
+                        f"🔗 ML: {result.ml_linked_wallets} wallet(s) vinculadas"
+                    )
+
+                # Blend ML score with traditional score
+                # 70% traditional, 30% ML
+                result.dev_score = round(
+                    result.dev_score * 0.70 + ml_result.ml_reputation_score * 0.30
+                )
+            except Exception as e:
+                logger.debug(f"DevTracker ML prediction error: {e}")
 
         return result
 
@@ -491,17 +548,36 @@ class DevTracker:
         profile = self._devs.get(address.lower())
         return profile.to_dict() if profile else None
 
+    def link_wallets(self, from_wallet: str, to_wallet: str, evidence: str = ""):
+        """v5: Record a funding link between two wallets for ML clustering."""
+        if self._ml_predictor:
+            try:
+                self._ml_predictor.link_wallets(from_wallet, to_wallet, evidence)
+                logger.debug(
+                    f"DevTracker: Linked {from_wallet[:10]}… → {to_wallet[:10]}… "
+                    f"({evidence})"
+                )
+            except Exception as e:
+                logger.debug(f"DevTracker: link_wallets error: {e}")
+
     def get_stats(self) -> dict:
         """Return tracker statistics."""
         total = len(self._devs)
         good = sum(1 for d in self._devs.values() if d.reputation_score >= 70)
         bad = sum(1 for d in self._devs.values() if d.rug_pulls >= 2)
-        return {
+        stats = {
             "total_tracked": total,
             "good_devs": good,
             "known_scammers": bad,
             "tokens_mapped": len(self._token_creators),
+            "ml_enabled": self._ml_predictor is not None,
         }
+        if self._ml_predictor:
+            stats["ml_clusters"] = len(self._ml_predictor._wallet_clusters)
+            stats["ml_funding_links"] = sum(
+                len(v) for v in self._ml_predictor._funding_graph.values()
+            )
+        return stats
 
     def stop(self):
         """Stop tracker."""
