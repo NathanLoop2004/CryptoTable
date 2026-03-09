@@ -307,6 +307,50 @@
                     <span class="v7-chip" id="v7-whale-chip" title="Whale Graph">🕸️ Whale: <span>ON</span></span>
                 </div>
             </div>
+
+            <!-- v8: API Health Dashboard -->
+            <div class="sniper-card">
+                <h3 class="sc-title">📡 API Health</h3>
+                <div id="api-health-panel" class="api-health-panel">
+                    <div class="api-health-row" data-api="honeypot">
+                        <span class="api-dot" id="api-dot-honeypot"></span>
+                        <span class="api-name">Honeypot.is</span>
+                        <span class="api-status" id="api-st-honeypot">—</span>
+                        <span class="api-latency" id="api-lat-honeypot">—</span>
+                    </div>
+                    <div class="api-health-row" data-api="goplus">
+                        <span class="api-dot" id="api-dot-goplus"></span>
+                        <span class="api-name">GoPlus</span>
+                        <span class="api-status" id="api-st-goplus">—</span>
+                        <span class="api-latency" id="api-lat-goplus">—</span>
+                    </div>
+                    <div class="api-health-row" data-api="dexscreener">
+                        <span class="api-dot" id="api-dot-dexscreener"></span>
+                        <span class="api-name">DexScreener</span>
+                        <span class="api-status" id="api-st-dexscreener">—</span>
+                        <span class="api-latency" id="api-lat-dexscreener">—</span>
+                    </div>
+                    <div class="api-health-row" data-api="coingecko">
+                        <span class="api-dot" id="api-dot-coingecko"></span>
+                        <span class="api-name">CoinGecko</span>
+                        <span class="api-status" id="api-st-coingecko">—</span>
+                        <span class="api-latency" id="api-lat-coingecko">—</span>
+                    </div>
+                    <div class="api-health-row" data-api="tokensniffer">
+                        <span class="api-dot" id="api-dot-tokensniffer"></span>
+                        <span class="api-name">TokenSniffer</span>
+                        <span class="api-status" id="api-st-tokensniffer">—</span>
+                        <span class="api-latency" id="api-lat-tokensniffer">—</span>
+                    </div>
+                </div>
+                <div class="api-cache-stats">
+                    <span>💾 Cache: <span id="api-cache-hit-rate">—</span></span>
+                    <span>📊 Entries: <span id="api-cache-entries">0</span></span>
+                </div>
+                <button class="btn-sniper btn-sm" id="btn-refresh-api-health" title="Refresh API health status">
+                    🔄 Refresh
+                </button>
+            </div>
         </div>
 
         <!-- RIGHT: Feed + Detected + Active -->

@@ -1,0 +1,106 @@
+# ─── Sniper Bot — Docker Compose ────────────────────────────
+# Usage:
+#   cp .env.example .env          # edit with your keys
+#   docker compose up -d          # start everything
+#   docker compose logs -f web    # follow bot logs
+#   docker compose down           # stop
+# ────────────────────────────────────────────────────────────
+
+services:
+  # ── Redis ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PostgreSQL (optional — remove if using SQLite) ────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${DB_NAME:-tradingweb}
+      POSTGRES_USER: ${DB_USER:-tradingweb}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change_me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-tradingweb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Django + Daphne (Web + WebSocket) ─────────────────────
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DB_HOST=db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "
+        python manage.py migrate --noinput &&
+        python manage.py collectstatic --noinput &&
+        daphne -b 0.0.0.0 -p 8000 TradingWeb.asgi:application
+      "
+
+  # ── Celery Worker (background tasks) ──────────────────────
+  celery:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DB_HOST=db
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    command: celery -A TradingWeb worker -l info --concurrency=2
+
+  # ── Celery Beat (scheduled tasks) ─────────────────────────
+  celery-beat:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DB_HOST=db
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    command: celery -A TradingWeb beat -l info
+
+volumes:
+  redis_data:
+  pg_data:

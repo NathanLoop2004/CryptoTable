@@ -125,6 +125,13 @@ class SniperConsumer(AsyncWebsocketConsumer):
             else:
                 await self._send_event("error", {"message": "Bot not running"})
 
+        elif action == "get_api_health":
+            if self.bot:
+                report = self.bot.api_manager.get_health_report()
+                await self._send_event("api_health", report)
+            else:
+                await self._send_event("error", {"message": "Bot not running"})
+
         else:
             await self._send_event("error", {"message": f"Unknown action: {action}"})
 

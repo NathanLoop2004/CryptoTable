@@ -93,6 +93,7 @@ from trading.Services.autoStrategyGenerator import AutoStrategyGenerator
 from trading.Services.predictiveLaunchScanner import PredictiveLaunchScanner
 from trading.Services.mempoolAnalyzer import MempoolAnalyzer
 from trading.Services.whaleNetworkGraph import WhaleNetworkGraph
+from trading.Services.apiResilience import ResilientAPIManager, APICallMetric
 
 logger = logging.getLogger(__name__)
 
@@ -519,10 +520,12 @@ class ActiveSnipe:
 class ContractAnalyzer:
     """Analyze a token contract for scam indicators using multiple APIs."""
 
-    def __init__(self, w3: Web3, chain_id: int, session: aiohttp.ClientSession | None = None):
+    def __init__(self, w3: Web3, chain_id: int, session: aiohttp.ClientSession | None = None,
+                 api_manager: ResilientAPIManager | None = None):
         self.w3 = w3
         self.chain_id = chain_id
         self._session = session   # shared session for connection pooling
+        self.api_manager = api_manager or ResilientAPIManager()
 
     async def analyze(self, token_address: str) -> TokenInfo:
         """Full analysis of a token contract."""
@@ -561,13 +564,15 @@ class ContractAnalyzer:
             else:
                 info.has_owner = False
 
-            # Run API checks in parallel (honeypot.is + GoPlus + DexScreener + CoinGecko + TokenSniffer)
+            # Run API checks in parallel through resilience manager
+            # (circuit breakers, caching, retries, health monitoring)
+            addr = info.address.lower()
             await asyncio.gather(
-                self._check_honeypot_api(info),
-                self._check_goplus_api(info),
-                self._check_dexscreener_api(info),
-                self._check_coingecko_api(info),
-                self._check_tokensniffer_api(info),
+                self._resilient_check_honeypot(info, addr),
+                self._resilient_check_goplus(info, addr),
+                self._resilient_check_dexscreener(info, addr),
+                self._resilient_check_coingecko(info, addr),
+                self._resilient_check_tokensniffer(info, addr),
                 return_exceptions=True,
             )
 
@@ -587,363 +592,444 @@ class ContractAnalyzer:
             return self._session
         return aiohttp.ClientSession()
 
-    async def _check_honeypot_api(self, info: TokenInfo):
-        """Use honeypot.is API to check for scams."""
-        try:
-            url = f"https://api.honeypot.is/v2/IsHoneypot?address={info.address}&chainID={self.chain_id}"
-            own_session = self._session is None or self._session.closed
-            session = await self._get_session() if not own_session else aiohttp.ClientSession()
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        hp = data.get("honeypotResult", {})
-                        info.is_honeypot = hp.get("isHoneypot", False)
+    # ─── Resilient API wrappers (circuit breaker + cache + retry) ─────
 
-                        sim = data.get("simulationResult", {})
-                        info.buy_tax = sim.get("buyTax", 0)
-                        info.sell_tax = sim.get("sellTax", 0)
+    async def _resilient_check_honeypot(self, info: TokenInfo, addr: str):
+        """Honeypot.is through resilience manager."""
+        cached = self.api_manager.cache.get(f"honeypot:{addr}")
+        if cached:
+            self._apply_honeypot_data(info, cached)
+            info._honeypot_ok = True
+            self.api_manager.health.record(APICallMetric(
+                api_name="honeypot", success=True, latency_ms=0,
+                timestamp=time.time(), cached=True))
+            return
+        result = await self.api_manager.call(
+            "honeypot",
+            lambda: self._fetch_honeypot_raw(info.address),
+            cache_key=f"honeypot:{addr}",
+            cache_ttl=120,
+        )
+        if result:
+            self._apply_honeypot_data(info, result)
+            info._honeypot_ok = True
 
-                        info._honeypot_ok = True   # API returned valid data
+    async def _resilient_check_goplus(self, info: TokenInfo, addr: str):
+        """GoPlus through resilience manager."""
+        cached = self.api_manager.cache.get(f"goplus:{addr}")
+        if cached:
+            self._apply_goplus_data(info, cached)
+            info._goplus_ok = True
+            self.api_manager.health.record(APICallMetric(
+                api_name="goplus", success=True, latency_ms=0,
+                timestamp=time.time(), cached=True))
+            return
+        result = await self.api_manager.call(
+            "goplus",
+            lambda: self._fetch_goplus_raw(addr),
+            cache_key=f"goplus:{addr}",
+            cache_ttl=300,
+        )
+        if result:
+            self._apply_goplus_data(info, result)
+            info._goplus_ok = True
 
-                        if info.is_honeypot:
-                            info.risk_reasons.append("🍯 HONEYPOT — no puedes vender")
-                        if info.buy_tax > 10:
-                            info.risk_reasons.append(f"💸 Buy tax alto: {info.buy_tax}%")
-                        if info.sell_tax > 10:
-                            info.risk_reasons.append(f"💸 Sell tax alto: {info.sell_tax}%")
-            finally:
-                if own_session:
-                    await session.close()
-        except Exception as e:
-            logger.debug(f"Honeypot API failed: {e}")
-
-    async def _check_goplus_api(self, info: TokenInfo):
-        """Use GoPlus Security API for deep contract analysis (free, no key)."""
-        try:
-            chain_id_str = str(self.chain_id)
-            addr = info.address.lower()
-            url = f"https://api.gopluslabs.com/api/v1/token_security/{chain_id_str}?contract_addresses={addr}"
-            own_session = self._session is None or self._session.closed
-            session = await self._get_session() if not own_session else aiohttp.ClientSession()
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status != 200:
-                        return
-                    data = await resp.json()
-            finally:
-                if own_session:
-                    await session.close()
-
-            result = data.get("result", {}).get(addr, {})
-            if not result:
-                return
-
-            info._goplus_ok = True   # GoPlus returned valid data
-
-            # Helper: GoPlus returns "1"/"0" strings
-            def flag(key):
-                return str(result.get(key, "0")) == "1"
-
-            # ── Map GoPlus flags to TokenInfo ──
-            info.is_open_source      = flag("is_open_source")
-            info.is_proxy            = flag("is_proxy")
-            info.is_mintable         = flag("is_mintable")
-            info.has_blacklist       = flag("is_blacklisted")
-            info.can_pause_trading   = flag("transfer_pausable")
-            info.has_hidden_owner    = flag("hidden_owner")
-            info.can_self_destruct   = flag("selfdestruct")
-            info.has_external_call   = flag("external_call")
-            info.cannot_sell_all     = flag("cannot_sell_all")
-            info.owner_can_change_balance = flag("owner_change_balance")
-            info.has_trading_cooldown     = flag("trading_cooldown")
-            info.personal_slippage_modifiable = flag("personal_slippage_modifiable")
-            info.is_anti_whale       = flag("is_anti_whale")
-            info.can_take_back_ownership = flag("can_take_back_ownership")
-            info.is_airdrop_scam     = flag("is_airdrop_scam")
-            info.is_true_token       = flag("is_true_token") if "is_true_token" in result else True
-
-            # If honeypot.is didn't catch it, GoPlus might
-            if flag("is_honeypot") and not info.is_honeypot:
-                info.is_honeypot = True
-                info.risk_reasons.append("🍯 HONEYPOT (GoPlus)")
-
-            # Buy/sell tax from GoPlus (if honeypot.is didn't get them)
-            if info.buy_tax == 0:
-                try:
-                    info.buy_tax = round(float(result.get("buy_tax", 0)) * 100, 1)
-                except (ValueError, TypeError):
-                    pass
-            if info.sell_tax == 0:
-                try:
-                    info.sell_tax = round(float(result.get("sell_tax", 0)) * 100, 1)
-                except (ValueError, TypeError):
-                    pass
-
-            # Holder / LP info
-            try:
-                info.holder_count = int(result.get("holder_count", 0))
-            except (ValueError, TypeError):
-                pass
-            try:
-                info.lp_holder_count = int(result.get("lp_holder_count", 0))
-            except (ValueError, TypeError):
-                pass
-
-            info.creator_address = result.get("creator_address", "")
-
-            # ── Top holder concentration ──
-            holders = result.get("holders", [])
-            if holders:
-                # Find the largest non-LP, non-dead, non-lock holder
-                dead_addrs = {"0x0000000000000000000000000000000000000000",
-                              "0x000000000000000000000000000000000000dead",
-                              "0x0000000000000000000000000000000000000001"}
-                lp_addrs = {lp.get("address", "").lower() for lp in result.get("lp_holders", [])}
-                for h in holders:
-                    h_addr = h.get("address", "").lower()
-                    if h_addr in dead_addrs or h_addr in lp_addrs:
-                        continue
-                    if str(h.get("is_locked", "0")) == "1":
-                        continue
-                    try:
-                        pct = float(h.get("percent", 0)) * 100
-                        if pct > info.top_holder_percent:
-                            info.top_holder_percent = round(pct, 2)
-                    except (ValueError, TypeError):
-                        pass
-
-            # Creator balance check
-            if info.creator_address:
-                creator_lower = info.creator_address.lower()
-                for h in holders:
-                    if h.get("address", "").lower() == creator_lower:
-                        try:
-                            info.creator_percent = round(float(h.get("percent", 0)) * 100, 2)
-                        except (ValueError, TypeError):
-                            pass
-                        break
-
-            # ── LP Lock detection ──
-            lp_holders = result.get("lp_holders", [])
-            total_lp_locked_pct = 0
-            best_lock_end = 0
-            lock_source = ""
-            for lp in lp_holders:
-                is_locked = str(lp.get("is_locked", "0")) == "1"
-                if is_locked:
-                    try:
-                        pct = float(lp.get("percent", 0)) * 100
-                        total_lp_locked_pct += pct
-                    except (ValueError, TypeError):
-                        pass
-                    locked_details = lp.get("locked_detail", [])
-                    for detail in locked_details:
-                        try:
-                            end_ts = float(detail.get("end_time", 0))
-                            if end_ts > best_lock_end:
-                                best_lock_end = end_ts
-                        except (ValueError, TypeError):
-                            pass
-                    # Common lock contracts
-                    lp_addr = lp.get("address", "").lower()
-                    tag = lp.get("tag", "")
-                    if tag:
-                        lock_source = tag
-                    elif "pink" in lp_addr:
-                        lock_source = "PinkLock"
-                    elif "unicrypt" in lp_addr:
-                        lock_source = "Unicrypt"
-                    elif "team.finance" in lp_addr or "teamfinance" in lp_addr:
-                        lock_source = "Team.Finance"
-
-            if total_lp_locked_pct > 0:
-                info.lp_locked = True
-                info.lp_lock_percent = round(total_lp_locked_pct, 1)
-                info.lp_lock_source = lock_source
-                if best_lock_end > 0:
-                    info.lp_lock_end_timestamp = best_lock_end
-                    remaining_h = max(0, (best_lock_end - time.time()) / 3600)
-                    info.lp_lock_hours_remaining = round(remaining_h, 1)
-                    info.risk_reasons.append(f"🔒 LP Locked {info.lp_lock_percent}% — {info.lp_lock_hours_remaining}h restantes")
-                    if lock_source:
-                        info.risk_reasons.append(f"🔐 Lock via: {lock_source}")
-                else:
-                    info.risk_reasons.append(f"🔒 LP Locked {info.lp_lock_percent}% (sin fecha de expiración)")
-            else:
-                info.risk_reasons.append("⚠️ Liquidez NO bloqueada — riesgo de rug pull")
-
-            # ── Build risk_reasons from flags ──
-            if not info.is_open_source:
-                info.risk_reasons.append("🔒 Código no verificado (no open source)")
-            if info.is_proxy:
-                info.risk_reasons.append("🔄 Contrato proxy — puede cambiar la lógica")
-            if info.is_mintable:
-                info.risk_reasons.append("🖨️ Owner puede crear más tokens (mint)")
-            if info.has_blacklist:
-                info.risk_reasons.append("🚫 Puede bloquear wallets (blacklist)")
-            if info.can_pause_trading:
-                info.risk_reasons.append("⏸️ Puede pausar el trading")
-            if info.has_hidden_owner:
-                info.risk_reasons.append("👤 Owner oculto")
-            if info.can_self_destruct:
-                info.risk_reasons.append("💣 Contrato puede autodestruirse")
-            if info.has_external_call:
-                info.risk_reasons.append("📡 Llamadas externas (puede cambiar comportamiento)")
-            if info.cannot_sell_all:
-                info.risk_reasons.append("🔐 No puedes vender todos tus tokens")
-            if info.owner_can_change_balance:
-                info.risk_reasons.append("⚠️ Owner puede modificar balances")
-            if info.has_trading_cooldown:
-                info.risk_reasons.append("⏳ Cooldown entre trades")
-            if info.personal_slippage_modifiable:
-                info.risk_reasons.append("📊 Slippage modificable por el owner")
-
-            logger.info(f"GoPlus analysis for {info.symbol}: {len(info.risk_reasons)} flags")
-
-        except Exception as e:
-            logger.debug(f"GoPlus API failed for {info.address}: {e}")
-
-    # ─── DexScreener API ───────────────────────────────────
-    async def _check_dexscreener_api(self, info: TokenInfo):
-        """Use DexScreener API to check trading activity and social presence (free, no key)."""
-        try:
-            url = f"https://api.dexscreener.com/latest/dex/tokens/{info.address}"
-            own_session = self._session is None or self._session.closed
-            session = await self._get_session() if not own_session else aiohttp.ClientSession()
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status != 200:
-                        return
-                    data = await resp.json()
-            finally:
-                if own_session:
-                    await session.close()
-
-            pairs = data.get("pairs") or []
-            if not pairs:
-                return
-
+    async def _resilient_check_dexscreener(self, info: TokenInfo, addr: str):
+        """DexScreener through resilience manager."""
+        cached = self.api_manager.cache.get(f"dexscreener:{addr}")
+        if cached:
+            self._apply_dexscreener_data(info, cached)
             info._dexscreener_ok = True
-            info.dexscreener_pairs = len(pairs)
+            self.api_manager.health.record(APICallMetric(
+                api_name="dexscreener", success=True, latency_ms=0,
+                timestamp=time.time(), cached=True))
+            return
+        result = await self.api_manager.call(
+            "dexscreener",
+            lambda: self._fetch_dexscreener_raw(info.address),
+            cache_key=f"dexscreener:{addr}",
+            cache_ttl=30,
+        )
+        if result:
+            self._apply_dexscreener_data(info, result)
+            info._dexscreener_ok = True
 
-            # Use the highest-liquidity pair as reference
-            best = max(pairs, key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0))
-
-            info.dexscreener_liquidity = float(best.get("liquidity", {}).get("usd", 0) or 0)
-
-            vol = best.get("volume", {})
-            info.dexscreener_volume_24h = float(vol.get("h24", 0) or 0)
-
-            txns = best.get("txns", {}).get("h24", {})
-            info.dexscreener_buys_24h = int(txns.get("buys", 0) or 0)
-            info.dexscreener_sells_24h = int(txns.get("sells", 0) or 0)
-
-            # Pair age
-            created = best.get("pairCreatedAt")
-            if created:
-                age_ms = time.time() * 1000 - float(created)
-                info.dexscreener_age_hours = round(max(0, age_ms / 3_600_000), 1)
-
-            # Social / website (from token info block)
-            token_info_block = best.get("info", {})
-            socials = token_info_block.get("socials", [])
-            websites = token_info_block.get("websites", [])
-            info.has_social_links = len(socials) > 0
-            info.has_website = len(websites) > 0
-
-            # ── Price change history ──
-            pc = best.get("priceChange", {})
-            try:
-                info.dexscreener_price_change_m5 = float(pc.get("m5", 0) or 0)
-            except (ValueError, TypeError):
-                pass
-            try:
-                info.dexscreener_price_change_h1 = float(pc.get("h1", 0) or 0)
-            except (ValueError, TypeError):
-                pass
-            try:
-                info.dexscreener_price_change_h6 = float(pc.get("h6", 0) or 0)
-            except (ValueError, TypeError):
-                pass
-            try:
-                info.dexscreener_price_change_h24 = float(pc.get("h24", 0) or 0)
-            except (ValueError, TypeError):
-                pass
-
-            # (Risk reasons from DexScreener data are built in _rebuild_flag_reasons)
-
-            logger.info(f"DexScreener for {info.symbol}: {info.dexscreener_pairs} pairs, ${info.dexscreener_volume_24h:.0f} vol")
-
-        except Exception as e:
-            logger.debug(f"DexScreener API failed for {info.address}: {e}")
-
-    # ─── CoinGecko API ────────────────────────────────────
-    async def _check_coingecko_api(self, info: TokenInfo):
-        """Check if token is listed on CoinGecko (free, no key). Listing = legitimacy signal."""
-        try:
-            platform = "binance-smart-chain" if self.chain_id == 56 else "ethereum"
-            url = f"https://api.coingecko.com/api/v3/coins/{platform}/contract/{info.address.lower()}"
-            own_session = self._session is None or self._session.closed
-            session = await self._get_session() if not own_session else aiohttp.ClientSession()
-            try:
-                headers = {"accept": "application/json"}
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
-                    if resp.status == 404:
-                        # Not listed — valid response, record it
-                        info._coingecko_ok = True
-                        info.listed_coingecko = False
-                        return
-                    if resp.status != 200:
-                        return
-                    data = await resp.json()
-            finally:
-                if own_session:
-                    await session.close()
-
+    async def _resilient_check_coingecko(self, info: TokenInfo, addr: str):
+        """CoinGecko through resilience manager."""
+        cached = self.api_manager.cache.get(f"coingecko:{addr}")
+        if cached is not None:
+            self._apply_coingecko_data(info, cached)
             info._coingecko_ok = True
-            info.listed_coingecko = True
-            info.coingecko_id = data.get("id", "")
+            self.api_manager.health.record(APICallMetric(
+                api_name="coingecko", success=True, latency_ms=0,
+                timestamp=time.time(), cached=True))
+            return
+        result = await self.api_manager.call(
+            "coingecko",
+            lambda: self._fetch_coingecko_raw(info.address),
+            cache_key=f"coingecko:{addr}",
+            cache_ttl=600,
+        )
+        if result is not None:
+            self._apply_coingecko_data(info, result)
+            info._coingecko_ok = True
 
+    async def _resilient_check_tokensniffer(self, info: TokenInfo, addr: str):
+        """TokenSniffer through resilience manager."""
+        cached = self.api_manager.cache.get(f"tokensniffer:{addr}")
+        if cached:
+            self._apply_tokensniffer_data(info, cached)
+            info._tokensniffer_ok = True
+            self.api_manager.health.record(APICallMetric(
+                api_name="tokensniffer", success=True, latency_ms=0,
+                timestamp=time.time(), cached=True))
+            return
+        result = await self.api_manager.call(
+            "tokensniffer",
+            lambda: self._fetch_tokensniffer_raw(info.address),
+            cache_key=f"tokensniffer:{addr}",
+            cache_ttl=300,
+        )
+        if result:
+            self._apply_tokensniffer_data(info, result)
+            info._tokensniffer_ok = True
+
+    # ─── Raw API fetchers (return parsed dicts, no mutations) ────────
+
+    async def _fetch_honeypot_raw(self, address: str) -> dict | None:
+        """Fetch honeypot.is data and return raw parsed dict."""
+        url = f"https://api.honeypot.is/v2/IsHoneypot?address={address}&chainID={self.chain_id}"
+        session = await self._get_session()
+        own = session is not self._session
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                return None
+        finally:
+            if own:
+                await session.close()
+
+    async def _fetch_goplus_raw(self, addr_lower: str) -> dict | None:
+        """Fetch GoPlus data and return the result dict for the address."""
+        url = f"https://api.gopluslabs.com/api/v1/token_security/{self.chain_id}?contract_addresses={addr_lower}"
+        session = await self._get_session()
+        own = session is not self._session
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                result = data.get("result", {}).get(addr_lower, {})
+                return result if result else None
+        finally:
+            if own:
+                await session.close()
+
+    async def _fetch_dexscreener_raw(self, address: str) -> dict | None:
+        """Fetch DexScreener data and return best-liquidity pair dict."""
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+        session = await self._get_session()
+        own = session is not self._session
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                pairs = data.get("pairs") or []
+                if not pairs:
+                    return None
+                best = max(pairs, key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0))
+                return {"pairs_count": len(pairs), "best": best}
+        finally:
+            if own:
+                await session.close()
+
+    async def _fetch_coingecko_raw(self, address: str) -> dict:
+        """Fetch CoinGecko listing status. Returns dict with 'listed' key."""
+        platform = "binance-smart-chain" if self.chain_id == 56 else "ethereum"
+        url = f"https://api.coingecko.com/api/v3/coins/{platform}/contract/{address.lower()}"
+        session = await self._get_session()
+        own = session is not self._session
+        try:
+            headers = {"accept": "application/json"}
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                if resp.status == 404:
+                    return {"listed": False, "id": ""}
+                if resp.status != 200:
+                    raise Exception(f"CoinGecko HTTP {resp.status}")
+                data = await resp.json()
+                return {"listed": True, "id": data.get("id", "")}
+        finally:
+            if own:
+                await session.close()
+
+    async def _fetch_tokensniffer_raw(self, address: str) -> dict | None:
+        """Fetch TokenSniffer data and return parsed dict."""
+        url = (f"https://tokensniffer.com/api/v2/tokens/{self.chain_id}/{address.lower()}"
+               f"?include_metrics=true&include_tests=true&block_until_ready=false")
+        session = await self._get_session()
+        own = session is not self._session
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                score = data.get("score")
+                if score is None:
+                    return None
+                return {
+                    "score": int(score),
+                    "is_flagged": data.get("is_flagged", False),
+                }
+        finally:
+            if own:
+                await session.close()
+
+    # ─── Data applicators (apply cached/fresh dict → TokenInfo) ──────
+
+    def _apply_honeypot_data(self, info: TokenInfo, data: dict):
+        """Apply honeypot.is API response to TokenInfo."""
+        hp = data.get("honeypotResult", {})
+        info.is_honeypot = hp.get("isHoneypot", False)
+        sim = data.get("simulationResult", {})
+        info.buy_tax = sim.get("buyTax", 0)
+        info.sell_tax = sim.get("sellTax", 0)
+        if info.is_honeypot:
+            info.risk_reasons.append("🍯 HONEYPOT — no puedes vender")
+        if info.buy_tax > 10:
+            info.risk_reasons.append(f"💸 Buy tax alto: {info.buy_tax}%")
+        if info.sell_tax > 10:
+            info.risk_reasons.append(f"💸 Sell tax alto: {info.sell_tax}%")
+
+    def _apply_goplus_data(self, info: TokenInfo, result: dict):
+        """Apply GoPlus API response to TokenInfo."""
+        def flag(key):
+            return str(result.get(key, "0")) == "1"
+
+        info.is_open_source      = flag("is_open_source")
+        info.is_proxy            = flag("is_proxy")
+        info.is_mintable         = flag("is_mintable")
+        info.has_blacklist       = flag("is_blacklisted")
+        info.can_pause_trading   = flag("transfer_pausable")
+        info.has_hidden_owner    = flag("hidden_owner")
+        info.can_self_destruct   = flag("selfdestruct")
+        info.has_external_call   = flag("external_call")
+        info.cannot_sell_all     = flag("cannot_sell_all")
+        info.owner_can_change_balance = flag("owner_change_balance")
+        info.has_trading_cooldown     = flag("trading_cooldown")
+        info.personal_slippage_modifiable = flag("personal_slippage_modifiable")
+        info.is_anti_whale       = flag("is_anti_whale")
+        info.can_take_back_ownership = flag("can_take_back_ownership")
+        info.is_airdrop_scam     = flag("is_airdrop_scam")
+        info.is_true_token       = flag("is_true_token") if "is_true_token" in result else True
+
+        if flag("is_honeypot") and not info.is_honeypot:
+            info.is_honeypot = True
+            info.risk_reasons.append("🍯 HONEYPOT (GoPlus)")
+
+        if info.buy_tax == 0:
+            try:
+                info.buy_tax = round(float(result.get("buy_tax", 0)) * 100, 1)
+            except (ValueError, TypeError):
+                pass
+        if info.sell_tax == 0:
+            try:
+                info.sell_tax = round(float(result.get("sell_tax", 0)) * 100, 1)
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            info.holder_count = int(result.get("holder_count", 0))
+        except (ValueError, TypeError):
+            pass
+        try:
+            info.lp_holder_count = int(result.get("lp_holder_count", 0))
+        except (ValueError, TypeError):
+            pass
+
+        info.creator_address = result.get("creator_address", "")
+
+        holders = result.get("holders", [])
+        if holders:
+            dead_addrs = {"0x0000000000000000000000000000000000000000",
+                          "0x000000000000000000000000000000000000dead",
+                          "0x0000000000000000000000000000000000000001"}
+            for h in holders:
+                h_addr = (h.get("address") or "").lower()
+                if h_addr in dead_addrs:
+                    continue
+                if str(h.get("is_locked", "0")) == "1" or str(h.get("is_contract", "0")) == "1":
+                    continue
+                try:
+                    pct = float(h.get("percent", 0)) * 100
+                    if pct > info.top_holder_percent:
+                        info.top_holder_percent = round(pct, 2)
+                except (ValueError, TypeError):
+                    pass
+                break
+
+        if info.creator_address:
+            for h in holders:
+                if (h.get("address") or "").lower() == info.creator_address.lower():
+                    try:
+                        info.creator_percent = round(float(h.get("percent", 0)) * 100, 2)
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+        # ── LP Lock detection ──
+        lp_holders = result.get("lp_holders", [])
+        total_lp_locked_pct = 0
+        best_lock_end = 0
+        lock_source = ""
+        for lp in lp_holders:
+            is_locked = str(lp.get("is_locked", "0")) == "1"
+            if is_locked:
+                try:
+                    pct = float(lp.get("percent", 0)) * 100
+                    total_lp_locked_pct += pct
+                except (ValueError, TypeError):
+                    pass
+                locked_details = lp.get("locked_detail", [])
+                for detail in locked_details:
+                    try:
+                        end_ts = float(detail.get("end_time", 0))
+                        if end_ts > best_lock_end:
+                            best_lock_end = end_ts
+                    except (ValueError, TypeError):
+                        pass
+                lp_addr = (lp.get("address") or "").lower()
+                tag = lp.get("tag", "")
+                if tag:
+                    lock_source = tag
+                elif "pink" in lp_addr:
+                    lock_source = "PinkLock"
+                elif "unicrypt" in lp_addr:
+                    lock_source = "Unicrypt"
+                elif "team.finance" in lp_addr or "teamfinance" in lp_addr:
+                    lock_source = "Team.Finance"
+
+        if total_lp_locked_pct > 0:
+            info.lp_locked = True
+            info.lp_lock_percent = round(total_lp_locked_pct, 1)
+            info.lp_lock_source = lock_source
+            if best_lock_end > 0:
+                info.lp_lock_end_timestamp = best_lock_end
+                remaining_h = max(0, (best_lock_end - time.time()) / 3600)
+                info.lp_lock_hours_remaining = round(remaining_h, 1)
+        else:
+            info.risk_reasons.append("⚠️ Liquidez NO bloqueada — riesgo de rug pull")
+
+        # GoPlus risk reasons
+        if not info.is_open_source:
+            info.risk_reasons.append("📝 Código no verificado (not open source)")
+        if info.is_proxy:
+            info.risk_reasons.append("🔄 Contrato proxy (puede cambiar lógica)")
+        if info.is_mintable:
+            info.risk_reasons.append("🖨️ Token mintable (pueden crear más supply)")
+        if info.has_blacklist:
+            info.risk_reasons.append("⛔ Tiene blacklist (pueden bloquear tu wallet)")
+        if info.can_pause_trading:
+            info.risk_reasons.append("⏸️ Puede pausar trading")
+        if info.has_hidden_owner:
+            info.risk_reasons.append("🕵️ Owner oculto")
+        if info.can_self_destruct:
+            info.risk_reasons.append("💣 Contrato puede autodestruirse")
+        if info.has_external_call:
+            info.risk_reasons.append("📡 Llamadas externas (puede cambiar comportamiento)")
+        if info.cannot_sell_all:
+            info.risk_reasons.append("🔐 No puedes vender todos tus tokens")
+        if info.owner_can_change_balance:
+            info.risk_reasons.append("⚠️ Owner puede modificar balances")
+        if info.has_trading_cooldown:
+            info.risk_reasons.append("⏳ Cooldown entre trades")
+        if info.personal_slippage_modifiable:
+            info.risk_reasons.append("📊 Slippage modificable por el owner")
+        logger.info(f"GoPlus analysis for {info.symbol}: {len(info.risk_reasons)} flags")
+
+    def _apply_dexscreener_data(self, info: TokenInfo, data: dict):
+        """Apply DexScreener data to TokenInfo."""
+        info.dexscreener_pairs = data.get("pairs_count", 0)
+        best = data.get("best", {})
+        if not best:
+            return
+
+        info.dexscreener_liquidity = float(best.get("liquidity", {}).get("usd", 0) or 0)
+        vol = best.get("volume", {})
+        info.dexscreener_volume_24h = float(vol.get("h24", 0) or 0)
+        txns = best.get("txns", {}).get("h24", {})
+        info.dexscreener_buys_24h = int(txns.get("buys", 0) or 0)
+        info.dexscreener_sells_24h = int(txns.get("sells", 0) or 0)
+
+        created = best.get("pairCreatedAt")
+        if created:
+            age_ms = time.time() * 1000 - float(created)
+            info.dexscreener_age_hours = round(max(0, age_ms / 3_600_000), 1)
+
+        token_info_block = best.get("info", {})
+        socials = token_info_block.get("socials", [])
+        websites = token_info_block.get("websites", [])
+        info.has_social_links = len(socials) > 0
+        info.has_website = len(websites) > 0
+
+        pc = best.get("priceChange", {})
+        for field_name, key in [
+            ("dexscreener_price_change_m5", "m5"),
+            ("dexscreener_price_change_h1", "h1"),
+            ("dexscreener_price_change_h6", "h6"),
+            ("dexscreener_price_change_h24", "h24"),
+        ]:
+            try:
+                setattr(info, field_name, float(pc.get(key, 0) or 0))
+            except (ValueError, TypeError):
+                pass
+
+        logger.info(f"DexScreener for {info.symbol}: {info.dexscreener_pairs} pairs, ${info.dexscreener_volume_24h:.0f} vol")
+
+    def _apply_coingecko_data(self, info: TokenInfo, data: dict):
+        """Apply CoinGecko listing data to TokenInfo."""
+        info.listed_coingecko = data.get("listed", False)
+        info.coingecko_id = data.get("id", "")
+        if info.listed_coingecko:
             logger.info(f"CoinGecko: {info.symbol} IS listed (id={info.coingecko_id})")
 
-        except Exception as e:
-            logger.debug(f"CoinGecko API failed for {info.address}: {e}")
+    def _apply_tokensniffer_data(self, info: TokenInfo, data: dict):
+        """Apply TokenSniffer data to TokenInfo."""
+        info.tokensniffer_score = data.get("score", -1)
+        info.tokensniffer_is_scam = data.get("is_flagged", False)
 
-    # ─── TokenSniffer API ──────────────────────────────────
+        if info.tokensniffer_is_scam:
+            info.risk_reasons.append(f"🚩 TokenSniffer: FLAGGED como scam (score {info.tokensniffer_score}/100)")
+        elif info.tokensniffer_score < 30:
+            info.risk_reasons.append(f"🚩 TokenSniffer score muy bajo: {info.tokensniffer_score}/100")
+        elif info.tokensniffer_score < 50:
+            info.risk_reasons.append(f"⚠️ TokenSniffer score bajo: {info.tokensniffer_score}/100")
+
+        logger.info(f"TokenSniffer for {info.symbol}: score={info.tokensniffer_score}, flagged={info.tokensniffer_is_scam}")
+
+    # ─── Legacy _check_*_api methods (kept as compatibility stubs) ───
+    async def _check_honeypot_api(self, info: TokenInfo):
+        """Legacy: delegates to resilient wrapper."""
+        await self._resilient_check_honeypot(info, info.address.lower())
+
+    async def _check_goplus_api(self, info: TokenInfo):
+        """Legacy: delegates to resilient wrapper."""
+        await self._resilient_check_goplus(info, info.address.lower())
+
+    async def _check_dexscreener_api(self, info: TokenInfo):
+        """Legacy: delegates to resilient wrapper."""
+        await self._resilient_check_dexscreener(info, info.address.lower())
+
+    async def _check_coingecko_api(self, info: TokenInfo):
+        """Legacy: delegates to resilient wrapper."""
+        await self._resilient_check_coingecko(info, info.address.lower())
+
     async def _check_tokensniffer_api(self, info: TokenInfo):
-        """Check TokenSniffer for scam score (free, no key for basic queries)."""
-        try:
-            chain_slug = "bsc" if self.chain_id == 56 else "eth"
-            url = f"https://tokensniffer.com/api/v2/tokens/{self.chain_id}/{info.address.lower()}?include_metrics=true&include_tests=true&block_until_ready=false"
-            own_session = self._session is None or self._session.closed
-            session = await self._get_session() if not own_session else aiohttp.ClientSession()
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status != 200:
-                        return
-                    data = await resp.json()
-            finally:
-                if own_session:
-                    await session.close()
+        """Legacy: delegates to resilient wrapper."""
+        await self._resilient_check_tokensniffer(info, info.address.lower())
 
-            score = data.get("score")
-            if score is not None:
-                info._tokensniffer_ok = True
-                info.tokensniffer_score = int(score)
-                info.tokensniffer_is_scam = data.get("is_flagged", False)
-
-                if info.tokensniffer_is_scam:
-                    info.risk_reasons.append(f"🚩 TokenSniffer: FLAGGED como scam (score {info.tokensniffer_score}/100)")
-                elif info.tokensniffer_score < 30:
-                    info.risk_reasons.append(f"🚩 TokenSniffer score muy bajo: {info.tokensniffer_score}/100")
-                elif info.tokensniffer_score < 50:
-                    info.risk_reasons.append(f"⚠️ TokenSniffer score bajo: {info.tokensniffer_score}/100")
-
-                logger.info(f"TokenSniffer for {info.symbol}: score={info.tokensniffer_score}, flagged={info.tokensniffer_is_scam}")
-
-        except Exception as e:
-            logger.debug(f"TokenSniffer API failed for {info.address}: {e}")
+    # (Old inline implementations removed — all logic now in _fetch_*_raw + _apply_*_data)
 
     def _rebuild_flag_reasons(self, info: TokenInfo) -> list[str]:
         """Rebuild descriptive risk reasons from stored security flags.
@@ -1249,7 +1335,10 @@ class SniperBot:
 
         # Shared aiohttp session (created/closed in run())
         self._http_session: aiohttp.ClientSession | None = None
-        self.analyzer = ContractAnalyzer(self.w3, chain_id)
+
+        # Resilient API Manager (circuit breakers, cache, retries, health)
+        self.api_manager = ResilientAPIManager()
+        self.analyzer = ContractAnalyzer(self.w3, chain_id, api_manager=self.api_manager)
 
         # Concurrency semaphore (limits parallel analyses)
         self._sem = asyncio.Semaphore(self.settings["max_concurrent"])
@@ -1389,7 +1478,7 @@ class SniperBot:
                 self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                 new_rpc = self._rpc_list[self._rpc_index]
                 self.w3 = Web3(Web3.HTTPProvider(new_rpc))
-                self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                 await asyncio.sleep(1.0 if is_429 else 0.3)
         # If all attempts fail, raise to let the main loop handle it
         raise ConnectionError("All RPCs failed for block_number")
@@ -1442,7 +1531,7 @@ class SniperBot:
                 self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                 new_rpc = self._rpc_list[self._rpc_index]
                 self.w3 = Web3(Web3.HTTPProvider(new_rpc))
-                self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                 await asyncio.sleep(0.5)
 
         logger.warning(f"Liquidity check failed after {max_attempts} attempts for {pair_address}: {last_err}")
@@ -1977,6 +2066,14 @@ class SniperBot:
             })
 
         # ── Professional v2: parallel deep analysis (runs for ALL tokens) ──
+        # v8 Priority Gate: skip heavy modules if token is confirmed honeypot
+        _skip_heavy = token_info.is_honeypot and (token_info._honeypot_ok or token_info._goplus_ok)
+        if _skip_heavy:
+            logger.info(f"⏩ Priority gate: skipping heavy analysis — {token_info.symbol} confirmed HONEYPOT")
+            await self._emit("scan_info", {
+                "message": f"⏩ {token_info.symbol}: honeypot confirmed, heavy analysis skipped",
+            })
+
         try:
             v2_tasks = []
             # Pump score analysis (no extra API calls — uses existing TokenInfo)
@@ -1984,18 +2081,18 @@ class SniperBot:
                 v2_tasks.append(("pump", asyncio.ensure_future(
                     self.pump_analyzer.analyze(token_info, usd_liq, pair_address)
                 )))
-            # Swap simulation: on-chain honeypot verification
-            if self.settings.get("enable_swap_sim", True) and self.swap_simulator:
+            # Swap simulation: on-chain honeypot verification — skip if already confirmed honeypot
+            if self.settings.get("enable_swap_sim", True) and self.swap_simulator and not _skip_heavy:
                 v2_tasks.append(("sim", asyncio.ensure_future(
                     self.swap_simulator.simulate(new_token)
                 )))
-            # Bytecode analysis: opcode-level malware detection
-            if self.settings.get("enable_bytecode", True) and self.bytecode_analyzer:
+            # Bytecode analysis: opcode-level malware detection — skip if confirmed honeypot
+            if self.settings.get("enable_bytecode", True) and self.bytecode_analyzer and not _skip_heavy:
                 v2_tasks.append(("bytecode", asyncio.ensure_future(
                     self.bytecode_analyzer.analyze_bytecode(new_token)
                 )))
             # Smart money: check if tracked whales already bought
-            if self.settings.get("enable_smart_money", False) and self.smart_money:
+            if self.settings.get("enable_smart_money", False) and self.smart_money and not _skip_heavy:
                 v2_tasks.append(("smart", asyncio.ensure_future(
                     self.smart_money.check_smart_buyers(new_token, pair_address)
                 )))
@@ -2138,30 +2235,34 @@ class SniperBot:
             logger.error(f"v2+v3 analysis pipeline error for {token_info.symbol}: {e}")
 
         # ── Professional v5: Advanced Intelligence ──────────────
+        # v8 Priority Gate: skip v5/v6/v7 heavy analysis for confirmed honeypots
+        if _skip_heavy:
+            logger.info(f"⏩ Priority gate: skipping v5/v6/v7 analysis — {token_info.symbol} confirmed HONEYPOT")
+
         try:
             v5_tasks = []
 
             # Proxy detection (async)
-            if self.settings.get("enable_proxy_detector", True):
+            if self.settings.get("enable_proxy_detector", True) and not _skip_heavy:
                 v5_tasks.append(("proxy", asyncio.ensure_future(
                     self.proxy_detector.analyze(new_token)
                 )))
 
             # Stress test (multi-amount slippage)
-            if self.settings.get("enable_stress_test", True) and self.stress_tester:
+            if self.settings.get("enable_stress_test", True) and self.stress_tester and not _skip_heavy:
                 v5_tasks.append(("stress", asyncio.ensure_future(
                     self.stress_tester.stress_test(new_token)
                 )))
 
             # ML Pump/Dump prediction (sync → wrap in executor)
-            if self.settings.get("enable_ml_predictor", True):
+            if self.settings.get("enable_ml_predictor", True) and not _skip_heavy:
                 loop = asyncio.get_event_loop()
                 v5_tasks.append(("ml", asyncio.ensure_future(
                     loop.run_in_executor(None, self.ml_predictor.predict, token_info)
                 )))
 
             # Social sentiment (async HTTP calls)
-            if self.settings.get("enable_social_sentiment", True):
+            if self.settings.get("enable_social_sentiment", True) and not _skip_heavy:
                 v5_tasks.append(("social", asyncio.ensure_future(
                     self.social_sentiment.analyze(
                         new_token,
@@ -2171,14 +2272,14 @@ class SniperBot:
                 )))
 
             # Anomaly detection (sync → wrap in executor)
-            if self.settings.get("enable_anomaly_detector", True):
+            if self.settings.get("enable_anomaly_detector", True) and not _skip_heavy:
                 loop = asyncio.get_event_loop()
                 v5_tasks.append(("anomaly", asyncio.ensure_future(
                     loop.run_in_executor(None, self.anomaly_detector.detect, token_info)
                 )))
 
             # Whale activity analysis
-            if self.settings.get("enable_whale_activity", True) and self.smart_money:
+            if self.settings.get("enable_whale_activity", True) and self.smart_money and not _skip_heavy:
                 v5_tasks.append(("whale", asyncio.ensure_future(
                     self.smart_money.analyze_whale_activity(
                         new_token, pair_address,
@@ -2188,7 +2289,7 @@ class SniperBot:
                 )))
 
             # Volatility-based slippage (async, uses DexScreener data)
-            if self.settings.get("enable_volatility_slippage", True):
+            if self.settings.get("enable_volatility_slippage", True) and not _skip_heavy:
                 dex_data = {
                     "price_change_m5": getattr(token_info, 'dexscreener_price_change_m5', 0),
                     "price_change_h1": getattr(token_info, 'dexscreener_price_change_h1', 0),
@@ -2304,7 +2405,7 @@ class SniperBot:
         # ═══════════════════════════════════════════════════════
         try:
             # v6: MEV threat analysis
-            if self.settings.get("enable_mev_protection", False):
+            if self.settings.get("enable_mev_protection", False) and not _skip_heavy:
                 try:
                     buy_amount = self.settings.get("buy_amount_native", 0.05)
                     mev_analysis = await self.mev_protector.analyze_threat(new_token, buy_amount)
@@ -2317,7 +2418,7 @@ class SniperBot:
                     logger.debug(f"MEV analysis failed for {token_info.symbol}: {e}")
 
             # v6: Multi-DEX best route
-            if self.settings.get("enable_multi_dex", True):
+            if self.settings.get("enable_multi_dex", True) and not _skip_heavy:
                 try:
                     buy_amount = self.settings.get("buy_amount_native", 0.05)
                     best_route = await self.multi_dex_router.find_best_route(
@@ -2364,7 +2465,7 @@ class SniperBot:
             v7_tasks = []
 
             # v7: Reinforcement Learning decision
-            if self.settings.get("enable_rl_learner", True):
+            if self.settings.get("enable_rl_learner", True) and not _skip_heavy:
                 async def _rl_analyze():
                     try:
                         market_data = {
@@ -2386,7 +2487,7 @@ class SniperBot:
                 v7_tasks.append(_rl_analyze())
 
             # v7: Orderflow analysis
-            if self.settings.get("enable_orderflow", True):
+            if self.settings.get("enable_orderflow", True) and not _skip_heavy:
                 async def _orderflow_analyze():
                     try:
                         return "orderflow", await self.orderflow_analyzer.analyze(new_token, pair_address)
@@ -2396,7 +2497,7 @@ class SniperBot:
                 v7_tasks.append(_orderflow_analyze())
 
             # v7: Market simulation
-            if self.settings.get("enable_market_simulator", True):
+            if self.settings.get("enable_market_simulator", True) and not _skip_heavy:
                 async def _sim_analyze():
                     try:
                         buy_amount = self.settings.get("buy_amount_native", 0.05)
@@ -2413,7 +2514,7 @@ class SniperBot:
                 v7_tasks.append(_sim_analyze())
 
             # v7: Auto strategy evaluation
-            if self.settings.get("enable_auto_strategy", True):
+            if self.settings.get("enable_auto_strategy", True) and not _skip_heavy:
                 async def _strategy_analyze():
                     try:
                         return "strategy", self.auto_strategy.evaluate_token(token_info)
@@ -2443,7 +2544,7 @@ class SniperBot:
                 v7_tasks.append(_mempool_v7_analyze())
 
             # v7: Whale network graph
-            if self.settings.get("enable_whale_graph", True):
+            if self.settings.get("enable_whale_graph", True) and not _skip_heavy:
                 async def _whale_graph_analyze():
                     try:
                         trades = []
@@ -3455,7 +3556,7 @@ class SniperBot:
                             self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                             new_rpc = self._rpc_list[self._rpc_index]
                             self.w3 = Web3(Web3.HTTPProvider(new_rpc))
-                            self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                            self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                             await self._emit("scan_info", {
                                 "message": f"Switched RPC → {new_rpc}",
                             })
@@ -3557,7 +3658,7 @@ class SniperBot:
                     self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                     new_rpc = self._rpc_list[self._rpc_index]
                     self.w3 = Web3(Web3.HTTPProvider(new_rpc))
-                    self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                    self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                     await self._emit("scan_info", {
                         "message": f"⏳ 429 on block fetch — switched to {new_rpc}, backoff {_backoff:.1f}s",
                     })

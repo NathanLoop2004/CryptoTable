@@ -1134,6 +1134,32 @@
                 addFeed(`🔔 Test webhook: ${parts.join(" | ")}`, data.discord || data.telegram ? "info" : "error");
                 break;
             }
+
+            case "api_health": {
+                const apis = data.apis || {};
+                for (const [name, api] of Object.entries(apis)) {
+                    const dot = $(`api-dot-${name}`);
+                    const st  = $(`api-st-${name}`);
+                    const lat = $(`api-lat-${name}`);
+                    if (!dot) continue;
+                    const status = api.status || "unknown";
+                    dot.className = `api-dot ${status}`;
+                    if (st) {
+                        st.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+                        st.className = `api-status ${status}`;
+                    }
+                    if (lat) {
+                        const ms = api.avg_latency_ms;
+                        lat.textContent = ms > 0 ? `${Math.round(ms)}ms` : "—";
+                    }
+                }
+                const cache = data.cache || {};
+                const hrEl = $("api-cache-hit-rate");
+                const enEl = $("api-cache-entries");
+                if (hrEl) hrEl.textContent = cache.hit_rate != null ? `${(cache.hit_rate * 100).toFixed(1)}%` : "—";
+                if (enEl) enEl.textContent = cache.entries || 0;
+                break;
+            }
         }
     }
 
@@ -2381,6 +2407,25 @@
         }, 60000);
     }
 
+    // v8: API Health refresh button + auto-poll
+    const btnRefreshApiHealth = $("btn-refresh-api-health");
+    let _apiHealthTimer = null;
+
+    function fetchApiHealth() {
+        if (ws && ws.readyState === WebSocket.OPEN && botRunning) {
+            sendWS({ action: "get_api_health" });
+        }
+    }
+
+    if (btnRefreshApiHealth) {
+        btnRefreshApiHealth.addEventListener("click", fetchApiHealth);
+    }
+
+    function startApiHealthAutoRefresh() {
+        if (_apiHealthTimer) clearInterval(_apiHealthTimer);
+        _apiHealthTimer = setInterval(fetchApiHealth, 15000); // every 15s
+    }
+
     /* ═══════════════════════════════════════════════════════════════
      *  Init
      * ═══════════════════════════════════════════════════════════════ */
@@ -2396,6 +2441,7 @@
     initTutorial();
     initAlertConfig();
     startDashboardAutoRefresh();
+    startApiHealthAutoRefresh();
 
     connectWS();
 })();

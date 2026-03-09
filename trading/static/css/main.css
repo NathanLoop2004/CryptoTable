@@ -2875,3 +2875,36 @@ body.resizing-col *, body.resizing-row * {
 .v7-badge.launch { background: rgba(255,165,0,0.12); color: #ffa500; }
 .v7-badge.mempool { background: rgba(30,150,255,0.12); color: #1e96ff; }
 .v7-badge.whale-graph { background: rgba(162,89,255,0.12); color: #a259ff; }
+
+/* ─── v8: API Health Dashboard ─── */
+.api-health-panel {
+    display: flex; flex-direction: column; gap: 6px;
+    margin-bottom: 10px;
+}
+.api-health-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 6px;
+    background: rgba(255,255,255,0.03);
+    font-size: .78rem;
+}
+.api-health-row:hover { background: rgba(255,255,255,0.06); }
+.api-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #5c6070; flex-shrink: 0;
+    transition: background .3s;
+}
+.api-dot.healthy  { background: #0ecb81; box-shadow: 0 0 6px rgba(14,203,129,0.5); }
+.api-dot.degraded { background: #f0b90b; box-shadow: 0 0 6px rgba(240,185,11,0.5); }
+.api-dot.down     { background: #f6465d; box-shadow: 0 0 6px rgba(246,70,93,0.5); }
+.api-name { flex: 1; color: var(--text-secondary); font-weight: 500; }
+.api-status { font-size: .72rem; font-weight: 600; min-width: 58px; text-align: center; }
+.api-status.healthy  { color: #0ecb81; }
+.api-status.degraded { color: #f0b90b; }
+.api-status.down     { color: #f6465d; }
+.api-latency { font-size: .68rem; color: #5c6070; min-width: 48px; text-align: right; }
+.api-cache-stats {
+    display: flex; gap: 14px; font-size: .72rem; color: #5c6070;
+    margin: 4px 0 8px;
+}
+.api-cache-stats span span { color: var(--text-secondary); font-weight: 600; }
+.btn-sm { font-size: .72rem; padding: 4px 12px; }
