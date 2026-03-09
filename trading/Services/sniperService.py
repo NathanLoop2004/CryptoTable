@@ -2780,7 +2780,7 @@ class SniperBot:
 
             # ── Alert: Snipe opportunity to Discord/Telegram ──
             try:
-                await self.alert_service.alert_snipe_opportunity(
+                result = await self.alert_service.alert_snipe_opportunity(
                     token=new_token,
                     symbol=token_info.symbol,
                     risk=token_info.risk,
@@ -2789,8 +2789,9 @@ class SniperBot:
                     risk_action=token_info.risk_engine_action,
                     auto_buy=self.settings.get("auto_buy", False),
                 )
-            except Exception:
-                pass
+                logger.info(f"[ALERT] alert_snipe_opportunity → channels={result.channels_sent}")
+            except Exception as e:
+                logger.warning(f"[ALERT] alert_snipe_opportunity FAILED: {e}")
 
             # ── Professional v3: Backend auto-buy via TradeExecutor ──
             if (self.settings.get("enable_trade_executor", False)
@@ -2930,57 +2931,42 @@ class SniperBot:
                 rejection_reason="" if passes_safety else "safety_check",
             )
             self.metrics_service.record_detection(detection)
-
-            # ── Discord/Telegram alerts for every analyzed token ──
-            if token_info:
-                # Collect rejection reasons
-                rejection_reasons = self._collect_rejection_reasons(token_info, passes_safety)
-
-                # Always alert: token detected with full analysis
-                try:
-                    await self.alert_service.alert_token_detected(
-                        token=new_token,
-                        symbol=token_info.symbol,
-                        name=token_info.name,
-                        risk=token_info.risk,
-                        liquidity_usd=usd_liq,
-                        token_info=token_info,
-                    )
-                except Exception:
-                    pass
-
-                # Alert if rejected with reasons
-                if not passes_safety and rejection_reasons:
-                    try:
-                        await self.alert_service.alert_token_rejected(
-                            token=new_token,
-                            symbol=token_info.symbol,
-                            reasons=rejection_reasons,
-                        )
-                    except Exception:
-                        pass
-
-                # Alert suspicious specifics
-                if token_info.is_honeypot:
-                    try:
-                        await self.alert_service.alert_token_suspicious(
-                            token=new_token,
-                            symbol=token_info.symbol,
-                            reasons=["Honeypot detected — buy/sell impossible"],
-                        )
-                    except Exception:
-                        pass
-                if token_info._risk_engine_ok and token_info.risk_engine_hard_stop:
-                    try:
-                        await self.alert_service.alert_token_suspicious(
-                            token=new_token,
-                            symbol=token_info.symbol,
-                            reasons=[f"Hard stop: {token_info.risk_engine_hard_stop_reason}"],
-                        )
-                    except Exception:
-                        pass
         except Exception as e:
             logger.debug(f"v4 metrics recording failed: {e}")
+
+        # ── Discord/Telegram alerts for every analyzed token ──
+        if token_info:
+            try:
+                # Collect rejection reasons
+                rejection_reasons = self._collect_rejection_reasons(token_info, passes_safety)
+                _sym = token_info.symbol or "?"
+                _risk = getattr(token_info, "risk", "unknown")
+                _name = getattr(token_info, "name", _sym)
+
+                logger.info(f"[ALERT] Sending unified alert for {_sym} ({new_token[:16]}…) "
+                            f"risk={_risk} passes={passes_safety} "
+                            f"discord_enabled={self.alert_service.config.get('discord_enabled')} "
+                            f"webhook={'SET' if self.alert_service.config.get('discord_webhook_url') else 'EMPTY'}")
+
+                # ONE comprehensive alert per token (avoids rate-limit issues)
+                try:
+                    result = await self.alert_service.alert_token_analysis(
+                        token=new_token,
+                        symbol=_sym,
+                        name=_name,
+                        risk=_risk,
+                        liquidity_usd=usd_liq,
+                        passes_safety=passes_safety,
+                        rejection_reasons=rejection_reasons if not passes_safety else None,
+                        token_info=token_info,
+                    )
+                    logger.info(f"[ALERT] alert_token_analysis → channels={result.channels_sent} "
+                                f"success={result.success}")
+                except Exception as e:
+                    logger.warning(f"[ALERT] alert_token_analysis FAILED: {e}", exc_info=True)
+
+            except Exception as e:
+                logger.warning(f"[ALERT] Alert dispatch failed for {new_token[:16]}: {e}")
 
     # ═══════════════════════════════════════════════════════════
     #  Real-time Sync event listener via WebSocket

@@ -184,11 +184,13 @@ class AlertService:
             symbol=symbol,
         )
 
-        # ── Rate limiting ──
-        if not self._check_rate_limit(category):
+        # ── Rate limiting (use category:token for per-token cooldowns) ──
+        rate_key = f"{category}:{token}" if token else category
+        if not self._check_rate_limit(rate_key):
             event.success = False
             event.channels_sent = ["rate_limited"]
             self._history.append(event)
+            logger.info(f"[ALERT-SEND] Rate-limited: {rate_key}")
             return event
 
         # ── Always log to file ──
@@ -209,10 +211,16 @@ class AlertService:
         if "discord" in target_channels and self.config["discord_enabled"]:
             if LEVEL_ORDER.get(level, 0) >= LEVEL_ORDER.get(self.config["min_level_discord"], 0):
                 tasks.append(("discord", self._send_discord(event)))
+        else:
+            if "discord" in target_channels:
+                logger.info(f"[ALERT-SEND] Discord skipped: enabled={self.config['discord_enabled']}, "
+                            f"webhook={'SET' if self.config.get('discord_webhook_url') else 'EMPTY'}")
 
         if "email" in target_channels and self.config["email_enabled"]:
             if LEVEL_ORDER.get(level, 0) >= LEVEL_ORDER.get(self.config["min_level_email"], 2):
                 tasks.append(("email", self._send_email(event)))
+
+        logger.info(f"[ALERT-SEND] '{event.title}' level={level} → tasks={[t[0] for t in tasks]}")
 
         if tasks:
             results = await asyncio.gather(
@@ -274,6 +282,114 @@ class AlertService:
         return await self.send(msg, level="warning", category="system")
 
     # ─── NEW: Rich token analysis alerts ────────────────
+
+    async def alert_token_analysis(self, token: str, symbol: str, name: str,
+                                   risk: str, liquidity_usd: float,
+                                   passes_safety: bool,
+                                   rejection_reasons: list[str] | None = None,
+                                   token_info=None):
+        """
+        Single comprehensive alert for every analyzed token.
+        Combines detection, verdict, rejection reasons, and
+        suspicious flags into ONE rich Discord embed.
+        """
+        risk_emoji = {"safe": "🟢", "warning": "🟡", "danger": "🔴"}.get(risk, "⚪")
+        is_honeypot = getattr(token_info, "is_honeypot", False) if token_info else False
+
+        # ── VERDICT header ──
+        if passes_safety:
+            verdict = "✅ **APTO PARA COMPRA**"
+            level = "info"
+        elif is_honeypot:
+            verdict = "🍯 **HONEYPOT — NO COMPRAR**"
+            level = "error"
+        else:
+            verdict = "🚫 **RECHAZADO — NO COMPRAR**"
+            level = "warning"
+
+        # ── BscScan / DexScreener links ──
+        bsc_link = f"[BscScan](https://bscscan.com/token/{token})"
+        dex_link = f"[DexScreener](https://dexscreener.com/bsc/{token})"
+
+        msg = (
+            f"{verdict}\n\n"
+            f"**{symbol}** ({name})\n"
+            f"📋 `{token}`\n"
+            f"🔗 {bsc_link} | {dex_link}\n\n"
+            f"{risk_emoji} Riesgo: **{risk.upper()}**\n"
+            f"💰 Liquidez: **${liquidity_usd:,.2f}**"
+        )
+
+        # ── Token details ──
+        details = []
+        if token_info:
+            buy_tax = getattr(token_info, "buy_tax", 0) or 0
+            sell_tax = getattr(token_info, "sell_tax", 0) or 0
+            details.append(f"📊 Impuestos: Buy {buy_tax}% / Sell {sell_tax}%")
+
+            if is_honeypot:
+                details.append("🍯 **HONEYPOT — compra/venta imposible**")
+
+            hp_sim = getattr(token_info, "swap_sim_honeypot", None)
+            if hp_sim:
+                details.append("🧪 Swap sim: Honeypot confirmado")
+            elif hp_sim is False:
+                can_buy = "✓" if getattr(token_info, "swap_sim_can_buy", False) else "✗"
+                can_sell = "✓" if getattr(token_info, "swap_sim_can_sell", False) else "✗"
+                details.append(f"🧪 Swap sim: Buy {can_buy} / Sell {can_sell}")
+
+            lp_locked = getattr(token_info, "lp_locked", False)
+            lp_pct = getattr(token_info, "lp_lock_percent", 0) or 0
+            details.append(f"🔒 LP Lock: {'SÍ' if lp_locked else 'NO'} ({lp_pct:.0f}%)")
+
+            # Risk engine
+            if getattr(token_info, "_risk_engine_ok", False):
+                score = getattr(token_info, "risk_engine_score", 0)
+                action = getattr(token_info, "risk_engine_action", "?")
+                hard_stop = getattr(token_info, "risk_engine_hard_stop", False)
+                details.append(f"🎯 Risk Engine: **{score}/100** → {action}"
+                               + (" ⛔ HARD STOP" if hard_stop else ""))
+
+            # Pump score
+            pump = getattr(token_info, "pump_score", 0) or 0
+            if pump > 0:
+                grade = getattr(token_info, "pump_grade", "?")
+                details.append(f"🚀 Pump Score: **{pump}/100** ({grade})")
+
+            # ML prediction
+            if getattr(token_info, "_ml_pump_ok", False):
+                ml_score = getattr(token_info, "ml_pump_score", 0)
+                ml_label = getattr(token_info, "ml_pump_label", "?")
+                details.append(f"🧠 ML Predicción: {ml_score}/100 ({ml_label})")
+
+            # v7 modules
+            if getattr(token_info, "_rl_ok", False):
+                details.append(f"🤖 RL: {token_info.rl_decision} ({token_info.rl_confidence:.0%})")
+            if getattr(token_info, "_orderflow_ok", False):
+                details.append(f"📈 Orderflow: organic {token_info.orderflow_organic_score:.0f}%")
+            if getattr(token_info, "_sim_v7_ok", False):
+                details.append(f"🧪 Simulator: risk {token_info.sim_v7_risk_score:.0f} → {token_info.sim_v7_recommendation}")
+            if getattr(token_info, "_whale_network_ok", False):
+                details.append(f"🐋 Whale sybil: {token_info.whale_network_sybil_risk:.0%}")
+
+            # Dev tracker
+            dev_score = getattr(token_info, "dev_score", 0) or 0
+            if dev_score > 0:
+                dev_label = getattr(token_info, "dev_label", "?")
+                details.append(f"👨‍💻 Dev: {dev_score}/100 ({dev_label})")
+
+        if details:
+            msg += "\n\n" + "\n".join(f"  {d}" for d in details)
+
+        # ── Rejection reasons ──
+        if not passes_safety and rejection_reasons:
+            msg += "\n\n🚩 **Razones de rechazo:**\n"
+            msg += "\n".join(f"  ❌ {r}" for r in rejection_reasons[:10])
+
+        return await self.send(
+            msg, level=level, category="token_analysis", token=token, symbol=symbol,
+            title=f"{risk_emoji} {symbol} — {verdict.split('**')[1] if '**' in verdict else 'ANALIZADO'}"
+        )
 
     async def alert_token_detected(self, token: str, symbol: str, name: str,
                                    risk: str, liquidity_usd: float, token_info=None):
@@ -472,20 +588,30 @@ class AlertService:
         """Send alert to Discord webhook."""
         webhook_url = self.config["discord_webhook_url"]
         if not webhook_url:
+            logger.info("[DISCORD] No webhook URL configured")
             return False
 
         await self._ensure_session()
-        color_map = {"info": 3447003, "warning": 16776960, "error": 15158332, "critical": 10038562}
+        color_map = {
+            "info": 3066993,       # green
+            "warning": 16776960,   # yellow
+            "error": 15158332,     # red
+            "critical": 10038562,  # dark red
+        }
         icon = {"info": "ℹ️", "warning": "⚠️", "error": "❌", "critical": "🚨"}.get(event.level, "📌")
 
+        # Truncate description to Discord's 4096 char limit
+        description = event.message[:4090] + "…" if len(event.message) > 4096 else event.message
+
         embed = {
-            "title": f"{icon} {event.title}",
-            "description": event.message,
-            "color": color_map.get(event.level, 3447003),
+            "title": f"{icon} {event.title}"[:256],
+            "description": description,
+            "color": color_map.get(event.level, 3066993),
             "footer": {"text": f"TradingWeb Sniper • {event.category}"},
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(event.timestamp)),
         }
-        if event.symbol:
+        # Only add token field for non-analysis alerts (analysis already has full info in description)
+        if event.symbol and event.category != "token_analysis":
             embed["fields"] = [
                 {"name": "Token", "value": f"`{event.symbol}`", "inline": True},
             ]
@@ -502,12 +628,13 @@ class AlertService:
         try:
             async with self._session.post(webhook_url, json=payload) as resp:
                 if resp.status in (200, 204):
+                    logger.info(f"[DISCORD] Sent: {event.title}")
                     return True
                 body = await resp.text()
-                logger.warning(f"Discord webhook error {resp.status}: {body[:200]}")
+                logger.warning(f"[DISCORD] webhook error {resp.status}: {body[:200]}")
                 return False
         except Exception as e:
-            logger.warning(f"Discord send error: {e}")
+            logger.warning(f"[DISCORD] send error: {e}")
             return False
 
     # ─── Email ──────────────────────────────────────────

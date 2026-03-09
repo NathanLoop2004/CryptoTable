@@ -275,6 +275,51 @@ class TestAlertServiceConvenienceMethods(unittest.TestCase):
         self.assertEqual(event.category, "system")
         self.assertEqual(event.level, "warning")
 
+    def test_alert_token_analysis_rejected(self):
+        event = self._run(self.service.alert_token_analysis(
+            token="0xABC123DEF456",
+            symbol="SCAM",
+            name="ScamToken",
+            risk="danger",
+            liquidity_usd=500.0,
+            passes_safety=False,
+            rejection_reasons=["Honeypot detected", "High sell tax 50%"],
+        ))
+        self.assertEqual(event.category, "token_analysis")
+        self.assertEqual(event.level, "warning")
+        self.assertIn("RECHAZADO", event.message)
+        self.assertIn("SCAM", event.message)
+        self.assertIn("Honeypot detected", event.message)
+
+    def test_alert_token_analysis_passed(self):
+        event = self._run(self.service.alert_token_analysis(
+            token="0xGOODTOKEN1234",
+            symbol="GOOD",
+            name="GoodToken",
+            risk="safe",
+            liquidity_usd=50000.0,
+            passes_safety=True,
+        ))
+        self.assertEqual(event.category, "token_analysis")
+        self.assertEqual(event.level, "info")
+        self.assertIn("APTO PARA COMPRA", event.message)
+
+    def test_alert_token_analysis_honeypot(self):
+        class FakeInfo:
+            is_honeypot = True
+        event = self._run(self.service.alert_token_analysis(
+            token="0xHONEY1234",
+            symbol="HONEY",
+            name="HoneyToken",
+            risk="danger",
+            liquidity_usd=1000.0,
+            passes_safety=False,
+            rejection_reasons=["Honeypot"],
+            token_info=FakeInfo(),
+        ))
+        self.assertEqual(event.level, "error")
+        self.assertIn("HONEYPOT", event.message)
+
 
 if __name__ == "__main__":
     unittest.main()
