@@ -240,7 +240,7 @@ class TestAlertServiceConvenienceMethods(unittest.TestCase):
 
     def test_alert_trade_executed(self):
         event = self._run(self.service.alert_trade_executed(
-            "TOKEN", "buy", 0.5, "0xTXHASH"
+            "0xTOKEN", "TOKEN", "buy", 0.5, "0xTXHASH"
         ))
         self.assertEqual(event.category, "trade")
         self.assertEqual(event.level, "info")
@@ -248,7 +248,7 @@ class TestAlertServiceConvenienceMethods(unittest.TestCase):
 
     def test_alert_trade_failed(self):
         event = self._run(self.service.alert_trade_failed(
-            "TOKEN", "sell", "Insufficient gas"
+            "0xTOKEN", "TOKEN", "sell", "Insufficient gas"
         ))
         self.assertEqual(event.category, "trade")
         self.assertEqual(event.level, "error")

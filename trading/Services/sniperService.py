@@ -1474,6 +1474,64 @@ class SniperBot:
             return 0
 
     # ─── Build token event payload ──────────────────────────
+    def _collect_rejection_reasons(self, ti: 'TokenInfo', passes: bool) -> list[str]:
+        """Collect human-readable rejection reasons for a token."""
+        if passes:
+            return []
+        reasons = []
+        if self.settings["only_safe"] and ti.risk == "danger":
+            reasons.append(f"Risk level: {ti.risk}")
+        if ti.buy_tax > self.settings["max_buy_tax"]:
+            reasons.append(f"Buy tax {ti.buy_tax}% > max {self.settings['max_buy_tax']}%")
+        if ti.sell_tax > self.settings["max_sell_tax"]:
+            reasons.append(f"Sell tax {ti.sell_tax}% > max {self.settings['max_sell_tax']}%")
+        if ti.is_honeypot:
+            reasons.append("Honeypot detected")
+        if ti._goplus_ok:
+            if not ti.is_open_source:
+                reasons.append("Code not verified (not open source)")
+            if ti.is_proxy:
+                reasons.append("Proxy contract — can change logic")
+            if ti.has_hidden_owner:
+                reasons.append("Hidden owner")
+            if ti.can_take_back_ownership:
+                reasons.append("Can reclaim ownership")
+            if ti.is_airdrop_scam:
+                reasons.append("Airdrop scam")
+            if not ti.is_true_token:
+                reasons.append("Fake ERC-20")
+            if ti.top_holder_percent >= 30:
+                reasons.append(f"Top holder has {ti.top_holder_percent}% supply")
+            if ti.creator_percent >= 20:
+                reasons.append(f"Creator retains {ti.creator_percent}% supply")
+        if not ti.lp_locked:
+            reasons.append("LP not locked")
+        elif ti.lp_lock_percent < 80:
+            reasons.append(f"LP lock only {ti.lp_lock_percent}%")
+        elif ti.lp_lock_hours_remaining < 24:
+            reasons.append(f"LP lock only {ti.lp_lock_hours_remaining}h remaining")
+        if ti.pump_score > 0 and getattr(ti, 'pump_grade', '') == "AVOID":
+            reasons.append(f"Pump grade AVOID (score={ti.pump_score})")
+        if ti._simulation_ok and ti.sim_is_honeypot:
+            reasons.append(f"Swap sim honeypot: {ti.sim_honeypot_reason}")
+        if ti._risk_engine_ok and ti.risk_engine_hard_stop:
+            reasons.append(f"Hard stop: {ti.risk_engine_hard_stop_reason}")
+        if ti._dev_ok and ti.dev_is_serial_scammer:
+            reasons.append(f"Serial scammer dev ({ti.dev_rug_pulls} past rugs)")
+        if ti._ml_pump_ok and ti.ml_pump_label == "danger":
+            reasons.append(f"ML dump prediction (score={ti.ml_pump_score})")
+        if ti._rl_ok and ti.rl_decision == "sell":
+            reasons.append(f"RL agent says SELL ({ti.rl_confidence:.0%})")
+        if ti._orderflow_ok and ti.orderflow_manipulation_risk >= self.settings.get("orderflow_max_manipulation", 0.7):
+            reasons.append(f"Orderflow manipulation {ti.orderflow_manipulation_risk:.0%}")
+        if ti._sim_v7_ok and ti.sim_v7_recommendation == "avoid":
+            reasons.append(f"Simulator: AVOID (risk={ti.sim_v7_risk_score:.0f})")
+        if ti._whale_network_ok and ti.whale_network_sybil_risk >= 0.7:
+            reasons.append(f"Sybil network risk {ti.whale_network_sybil_risk:.0%}")
+        if ti._mempool_v7_ok and ti.mempool_v7_frontrun_risk >= 0.8:
+            reasons.append(f"Mempool frontrun risk {ti.mempool_v7_frontrun_risk:.0%}")
+        return reasons[:10]
+
     def _build_token_event_data(self, token: str, pair: str, info: 'TokenInfo',
                                  native_liq: float, usd_liq: float,
                                  has_liquidity: bool, block: int) -> dict:
@@ -2720,6 +2778,20 @@ class SniperBot:
                 "backend_buy_available": token_info.backend_buy_available,
             })
 
+            # ── Alert: Snipe opportunity to Discord/Telegram ──
+            try:
+                await self.alert_service.alert_snipe_opportunity(
+                    token=new_token,
+                    symbol=token_info.symbol,
+                    risk=token_info.risk,
+                    liquidity_usd=usd_liq,
+                    risk_score=token_info.risk_engine_score,
+                    risk_action=token_info.risk_engine_action,
+                    auto_buy=self.settings.get("auto_buy", False),
+                )
+            except Exception:
+                pass
+
             # ── Professional v3: Backend auto-buy via TradeExecutor ──
             if (self.settings.get("enable_trade_executor", False)
                     and self.trade_executor
@@ -2767,6 +2839,16 @@ class SniperBot:
                                     "mev_strategy": protected.strategy_used,
                                 })
                                 logger.info(f"🛡️ MEV-protected BUY for {token_info.symbol}: tx={tx_hash} (strategy={protected.strategy_used})")
+                                # Alert: MEV-protected trade
+                                try:
+                                    await self.alert_service.alert_trade_executed(
+                                        token=new_token, symbol=token_info.symbol,
+                                        action="buy", amount=buy_amount, tx_hash=tx_hash,
+                                        extra={"mev_protected": True, "mev_strategy": protected.strategy_used,
+                                               "risk_engine_score": token_info.risk_engine_score},
+                                    )
+                                except Exception:
+                                    pass
                             else:
                                 logger.warning(f"MEV protection failed for {token_info.symbol}, falling back to normal buy")
                                 use_mev = False  # fall through to normal buy
@@ -2791,6 +2873,15 @@ class SniperBot:
                                 "mev_protected": False,
                             })
                             logger.info(f"🎯 Backend BUY executed for {token_info.symbol}: tx={trade_result.tx_hash}")
+                            # Alert: trade executed
+                            try:
+                                await self.alert_service.alert_trade_executed(
+                                    token=new_token, symbol=token_info.symbol,
+                                    action="buy", amount=buy_amount, tx_hash=trade_result.tx_hash,
+                                    extra={"risk_engine_score": token_info.risk_engine_score},
+                                )
+                            except Exception:
+                                pass
                         elif trade_result:
                             await self._emit("backend_buy_failed", {
                                 "token": new_token,
@@ -2798,6 +2889,14 @@ class SniperBot:
                                 "error": trade_result.error,
                             })
                             logger.warning(f"Backend BUY failed for {token_info.symbol}: {trade_result.error}")
+                            # Alert: trade failed
+                            try:
+                                await self.alert_service.alert_trade_failed(
+                                    token=new_token, symbol=token_info.symbol,
+                                    action="buy", error=trade_result.error or "Unknown error",
+                                )
+                            except Exception:
+                                pass
 
                     # v6: Record trade outcome for AI optimizer
                     if self.settings.get("enable_ai_optimizer", True) and self.strategy_optimizer:
@@ -2832,17 +2931,54 @@ class SniperBot:
             )
             self.metrics_service.record_detection(detection)
 
-            # Alert on suspicious tokens
-            if token_info and token_info.is_honeypot:
-                await self.alert_service.alert_token_suspicious(
-                    token_info.symbol, new_token,
-                    "Honeypot detected", "warning",
-                )
-            if token_info and token_info._risk_engine_ok and token_info.risk_engine_hard_stop:
-                await self.alert_service.alert_token_suspicious(
-                    token_info.symbol, new_token,
-                    f"Hard stop: {token_info.risk_engine_hard_stop_reason}", "error",
-                )
+            # ── Discord/Telegram alerts for every analyzed token ──
+            if token_info:
+                # Collect rejection reasons
+                rejection_reasons = self._collect_rejection_reasons(token_info, passes_safety)
+
+                # Always alert: token detected with full analysis
+                try:
+                    await self.alert_service.alert_token_detected(
+                        token=new_token,
+                        symbol=token_info.symbol,
+                        name=token_info.name,
+                        risk=token_info.risk,
+                        liquidity_usd=usd_liq,
+                        token_info=token_info,
+                    )
+                except Exception:
+                    pass
+
+                # Alert if rejected with reasons
+                if not passes_safety and rejection_reasons:
+                    try:
+                        await self.alert_service.alert_token_rejected(
+                            token=new_token,
+                            symbol=token_info.symbol,
+                            reasons=rejection_reasons,
+                        )
+                    except Exception:
+                        pass
+
+                # Alert suspicious specifics
+                if token_info.is_honeypot:
+                    try:
+                        await self.alert_service.alert_token_suspicious(
+                            token=new_token,
+                            symbol=token_info.symbol,
+                            reasons=["Honeypot detected — buy/sell impossible"],
+                        )
+                    except Exception:
+                        pass
+                if token_info._risk_engine_ok and token_info.risk_engine_hard_stop:
+                    try:
+                        await self.alert_service.alert_token_suspicious(
+                            token=new_token,
+                            symbol=token_info.symbol,
+                            reasons=[f"Hard stop: {token_info.risk_engine_hard_stop_reason}"],
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             logger.debug(f"v4 metrics recording failed: {e}")
 
@@ -3154,6 +3290,16 @@ class SniperBot:
                     "action": action,
                     "tx_hash": alert.tx_hash,
                 })
+                # ── Send rug alert to Discord/Telegram ──
+                try:
+                    await self.alert_service.alert_rug_detected(
+                        token=alert.token_address,
+                        symbol=sym or "?",
+                        message=f"[{alert.rug_type}] {alert.description}\nAction: {action}",
+                        severity=alert.severity,
+                    )
+                except Exception:
+                    pass
             self.rug_detector.set_callbacks(_rug_alert_cb, self._emit)
             self._rug_task = asyncio.ensure_future(self.rug_detector.run())
             await self._emit("scan_info", {"message": "🛡️ Rug detector launched"})

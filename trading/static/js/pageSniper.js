@@ -1119,6 +1119,21 @@
                 if (dcRow) dcRow.style.display = ac.discord_enabled ? "flex" : "none";
                 break;
             }
+
+            case "webhook_test_result": {
+                const btn = $("btn-test-webhook");
+                if (btn) { btn.disabled = false; btn.textContent = "🔔 Test Webhook"; }
+                const parts = [];
+                if (data.discord === true) parts.push("✅ Discord OK");
+                else if (data.discord === false) parts.push(`❌ Discord falló${data.discord_error ? ": " + data.discord_error : ""}`);
+                else parts.push("⚪ Discord no configurado");
+                if (data.telegram === true) parts.push("✅ Telegram OK");
+                else if (data.telegram === false) parts.push(`❌ Telegram falló${data.telegram_error ? ": " + data.telegram_error : ""}`);
+                else parts.push("⚪ Telegram no configurado");
+                if (data.error) parts.push(`❌ Error: ${data.error}`);
+                addFeed(`🔔 Test webhook: ${parts.join(" | ")}`, data.discord || data.telegram ? "info" : "error");
+                break;
+            }
         }
     }
 
@@ -2317,6 +2332,24 @@
         if (discordToggle)  discordToggle.addEventListener("change", syncAlertConfig);
         if (emailToggle)    emailToggle.addEventListener("change", syncAlertConfig);
         if (discordWebhookUrl) discordWebhookUrl.addEventListener("change", syncAlertConfig);
+
+        // Test Webhook button
+        const btnTestWebhook = $("btn-test-webhook");
+        if (btnTestWebhook) {
+            btnTestWebhook.addEventListener("click", () => {
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    addFeed("❌ WebSocket no conectado. Inicia el bot primero.", "error");
+                    return;
+                }
+                btnTestWebhook.disabled = true;
+                btnTestWebhook.textContent = "⏳ Enviando…";
+                sendWS({ action: "test_webhook" });
+                setTimeout(() => {
+                    btnTestWebhook.disabled = false;
+                    btnTestWebhook.textContent = "🔔 Test Webhook";
+                }, 5000);
+            });
+        }
 
         updateDiscordUI();
     }

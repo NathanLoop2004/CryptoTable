@@ -111,6 +111,20 @@ class SniperConsumer(AsyncWebsocketConsumer):
             else:
                 await self._send_event("error", {"message": "Bot not running"})
 
+        elif action == "test_webhook":
+            if self.bot:
+                try:
+                    results = await self.bot.alert_service.send_test_webhook()
+                    await self._send_event("webhook_test_result", results)
+                except Exception as e:
+                    await self._send_event("webhook_test_result", {
+                        "error": str(e)[:200],
+                        "discord": False,
+                        "telegram": False,
+                    })
+            else:
+                await self._send_event("error", {"message": "Bot not running"})
+
         else:
             await self._send_event("error", {"message": f"Unknown action: {action}"})
 

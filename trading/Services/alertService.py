@@ -233,7 +233,9 @@ class AlertService:
 
     async def alert_token_suspicious(self, token: str, symbol: str, reasons: list[str]):
         """Alert about a suspicious token."""
-        msg = f"Token {symbol} ({token[:10]}…) flagged:\n" + "\n".join(f"  • {r}" for r in reasons[:5])
+        if isinstance(reasons, str):
+            reasons = [reasons]
+        msg = f"⚠️ Token **{symbol}** (`{token[:16]}…`) flagged:\n" + "\n".join(f"  • {r}" for r in reasons[:5])
         return await self.send(msg, level="warning", category="token", token=token, symbol=symbol)
 
     async def alert_rpc_error(self, rpc_url: str, error: str):
@@ -241,26 +243,192 @@ class AlertService:
         msg = f"RPC failed: {rpc_url}\nError: {error[:200]}"
         return await self.send(msg, level="error", category="rpc")
 
-    async def alert_trade_executed(self, symbol: str, action: str, amount: float, tx_hash: str):
+    async def alert_trade_executed(self, token: str, symbol: str, action: str,
+                                   amount: float, tx_hash: str, extra: dict = None):
         """Alert about a trade execution."""
-        msg = f"{action.upper()} {symbol}: {amount} native\nTx: {tx_hash}"
-        return await self.send(msg, level="info", category="trade", symbol=symbol)
+        msg = f"{'🟢 BUY' if action == 'buy' else '🔴 SELL'} **{symbol}**: {amount} BNB"
+        if tx_hash:
+            msg += f"\n🔗 Tx: `{tx_hash[:20]}…`"
+        if extra:
+            if extra.get("mev_protected"):
+                msg += f"\n🛡️ MEV protected ({extra.get('mev_strategy', 'unknown')})"
+            if extra.get("risk_engine_score"):
+                msg += f"\n📊 Risk score: {extra['risk_engine_score']}/100"
+        return await self.send(msg, level="info", category="trade", token=token, symbol=symbol)
 
-    async def alert_trade_failed(self, symbol: str, action: str, error: str):
+    async def alert_trade_failed(self, token: str, symbol: str, action: str, error: str):
         """Alert about a failed trade."""
-        msg = f"{action.upper()} FAILED for {symbol}: {error}"
-        return await self.send(msg, level="error", category="trade", symbol=symbol)
+        msg = f"❌ {action.upper()} FAILED for **{symbol}** (`{token[:16]}…`)\n{error}"
+        return await self.send(msg, level="error", category="trade", token=token, symbol=symbol)
 
     async def alert_rug_detected(self, token: str, symbol: str, message: str, severity: int):
         """Alert about rug pull detection."""
         level = "critical" if severity >= 8 else "error" if severity >= 5 else "warning"
-        msg = f"RUG ALERT [{severity}/10]: {symbol} ({token[:10]}…)\n{message}"
+        bars = "🔴" * min(severity, 10) + "⚪" * max(0, 10 - severity)
+        msg = f"🚨 **RUG ALERT** [{severity}/10] {bars}\n**{symbol}** (`{token[:16]}…`)\n{message}"
         return await self.send(msg, level=level, category="rug", token=token, symbol=symbol)
 
     async def alert_resource_warning(self, warnings: list[str]):
         """Alert about resource issues."""
         msg = "Resource monitoring:\n" + "\n".join(warnings)
         return await self.send(msg, level="warning", category="system")
+
+    # ─── NEW: Rich token analysis alerts ────────────────
+
+    async def alert_token_detected(self, token: str, symbol: str, name: str,
+                                   risk: str, liquidity_usd: float, token_info=None):
+        """
+        Rich alert when a new token is detected and analyzed.
+        Sends a comprehensive embed with analysis results.
+        """
+        risk_emoji = {"safe": "🟢", "warning": "🟡", "danger": "🔴"}.get(risk, "⚪")
+        msg = (
+            f"🔍 New token detected: **{symbol}** ({name})\n"
+            f"{risk_emoji} Risk: **{risk.upper()}**\n"
+            f"💰 Liquidity: **${liquidity_usd:,.0f}**"
+        )
+        details = []
+        if token_info:
+            # Core metrics
+            if getattr(token_info, "buy_tax", 0):
+                details.append(f"Buy tax: {token_info.buy_tax}%")
+            if getattr(token_info, "sell_tax", 0):
+                details.append(f"Sell tax: {token_info.sell_tax}%")
+            if getattr(token_info, "is_honeypot", False):
+                details.append("⚠️ HONEYPOT")
+            if getattr(token_info, "lp_locked", False):
+                details.append(f"LP locked: {getattr(token_info, 'lp_lock_percent', 0)}%")
+            # Risk engine
+            if getattr(token_info, "_risk_engine_ok", False):
+                details.append(f"Risk score: {token_info.risk_engine_score}/100 ({token_info.risk_engine_action})")
+            # Pump score
+            if getattr(token_info, "pump_score", 0) > 0:
+                details.append(f"Pump score: {token_info.pump_score}/100 ({getattr(token_info, 'pump_grade', '?')})")
+            # ML prediction
+            if getattr(token_info, "_ml_pump_ok", False):
+                details.append(f"ML: {token_info.ml_pump_score}/100 ({getattr(token_info, 'ml_pump_label', '?')})")
+            # v7 modules
+            if getattr(token_info, "_rl_ok", False):
+                details.append(f"🤖 RL: {token_info.rl_decision} ({token_info.rl_confidence:.0%})")
+            if getattr(token_info, "_orderflow_ok", False):
+                details.append(f"📊 Orderflow: organic {token_info.orderflow_organic_score:.0f}%")
+            if getattr(token_info, "_sim_v7_ok", False):
+                details.append(f"🧪 Simulator: risk {token_info.sim_v7_risk_score:.0f} → {token_info.sim_v7_recommendation}")
+            if getattr(token_info, "_whale_network_ok", False):
+                details.append(f"🐋 Whale sybil: {token_info.whale_network_sybil_risk:.0%}")
+        if details:
+            msg += "\n\n" + "\n".join(f"  • {d}" for d in details)
+
+        return await self.send(
+            msg, level="info", category="token", token=token, symbol=symbol,
+            title=f"🔍 {symbol} detected — {risk.upper()}"
+        )
+
+    async def alert_token_rejected(self, token: str, symbol: str, reasons: list[str]):
+        """Alert when a token is rejected with specific reasons."""
+        if isinstance(reasons, str):
+            reasons = [reasons]
+        msg = (
+            f"🚫 **{symbol}** (`{token[:16]}…`) **REJECTED**\n"
+            + "\n".join(f"  ❌ {r}" for r in reasons[:8])
+        )
+        return await self.send(
+            msg, level="warning", category="token", token=token, symbol=symbol,
+            title=f"🚫 {symbol} rejected"
+        )
+
+    async def alert_snipe_opportunity(self, token: str, symbol: str, risk: str,
+                                      liquidity_usd: float, risk_score: int = 0,
+                                      risk_action: str = "", auto_buy: bool = False):
+        """Alert when a safe token passes all checks — buy opportunity."""
+        risk_emoji = {"safe": "🟢", "warning": "🟡"}.get(risk, "🟢")
+        msg = (
+            f"🎯 **SNIPE OPPORTUNITY: {symbol}**\n"
+            f"{risk_emoji} Risk: **{risk.upper()}**\n"
+            f"💰 Liquidity: **${liquidity_usd:,.0f}**\n"
+        )
+        if risk_score:
+            msg += f"📊 Risk score: **{risk_score}/100** ({risk_action})\n"
+        if auto_buy:
+            msg += "⚡ Auto-buy: **ENABLED** — executing trade…\n"
+        else:
+            msg += "👆 Auto-buy: OFF — manual confirmation needed\n"
+        return await self.send(
+            msg, level="info", category="trade", token=token, symbol=symbol,
+            title=f"🎯 SNIPE: {symbol}"
+        )
+
+    async def send_test_webhook(self) -> dict:
+        """
+        Send a test alert to all enabled channels.
+        Returns dict with results per channel.
+        """
+        import datetime
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        results = {}
+
+        if self.config["discord_enabled"] and self.config.get("discord_webhook_url"):
+            await self._ensure_session()
+            embed = {
+                "title": "✅ Discord Webhook Connected",
+                "description": (
+                    "Tu webhook de Discord está funcionando correctamente.\n"
+                    "Recibirás alertas de:\n\n"
+                    "🔍 **Tokens detectados** — análisis completo\n"
+                    "🎯 **Oportunidades de snipe** — tokens que pasan todos los filtros\n"
+                    "🚫 **Tokens rechazados** — y por qué fueron bloqueados\n"
+                    "💰 **Trades ejecutados** — compras y ventas automáticas\n"
+                    "🚨 **Rug pulls detectados** — alertas de emergencia\n"
+                    "🐋 **Whale alerts** — movimientos de ballenas\n"
+                    "🤖 **RL decisions** — decisiones del agente de IA\n"
+                ),
+                "color": 3066993,  # green
+                "fields": [
+                    {"name": "Estado", "value": "🟢 Conectado", "inline": True},
+                    {"name": "Hora", "value": now, "inline": True},
+                    {"name": "Canales activos", "value": (
+                        ("✅ Discord " if self.config["discord_enabled"] else "❌ Discord ") +
+                        ("✅ Telegram " if self.config["telegram_enabled"] else "❌ Telegram ") +
+                        ("✅ Email" if self.config["email_enabled"] else "❌ Email")
+                    ), "inline": False},
+                ],
+                "footer": {"text": "TradingWeb Sniper Bot • Alertas en tiempo real"},
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            payload = {
+                "username": "TradingWeb Sniper",
+                "avatar_url": "https://i.imgur.com/4M34hi2.png",
+                "embeds": [embed],
+            }
+            try:
+                async with self._session.post(self.config["discord_webhook_url"], json=payload) as resp:
+                    results["discord"] = resp.status in (200, 204)
+                    if resp.status not in (200, 204):
+                        body = await resp.text()
+                        results["discord_error"] = body[:200]
+            except Exception as e:
+                results["discord"] = False
+                results["discord_error"] = str(e)[:200]
+        else:
+            results["discord"] = None
+            results["discord_reason"] = "disabled or no webhook URL"
+
+        if self.config["telegram_enabled"] and self.config.get("telegram_bot_token"):
+            event = AlertEvent(
+                timestamp=time.time(), level="info", category="system",
+                title="✅ Test — Conexión OK",
+                message="Webhook de Telegram conectado. Recibirás alertas del Sniper Bot.",
+            )
+            try:
+                results["telegram"] = await self._send_telegram(event)
+            except Exception as e:
+                results["telegram"] = False
+                results["telegram_error"] = str(e)[:200]
+        else:
+            results["telegram"] = None
+            results["telegram_reason"] = "disabled or no token"
+
+        return results
 
     # ─── Telegram ───────────────────────────────────────
 
