@@ -597,7 +597,7 @@ class ContractAnalyzer:
     async def _resilient_check_honeypot(self, info: TokenInfo, addr: str):
         """Honeypot.is through resilience manager."""
         cached = self.api_manager.cache.get(f"honeypot:{addr}")
-        if cached:
+        if cached is not None:
             self._apply_honeypot_data(info, cached)
             info._honeypot_ok = True
             self.api_manager.health.record(APICallMetric(
@@ -610,15 +610,16 @@ class ContractAnalyzer:
             cache_key=f"honeypot:{addr}",
             cache_ttl=120,
         )
-        if result:
+        if result is not None:
             self._apply_honeypot_data(info, result)
             info._honeypot_ok = True
 
     async def _resilient_check_goplus(self, info: TokenInfo, addr: str):
         """GoPlus through resilience manager."""
         cached = self.api_manager.cache.get(f"goplus:{addr}")
-        if cached:
-            self._apply_goplus_data(info, cached)
+        if cached is not None:
+            if cached:
+                self._apply_goplus_data(info, cached)
             info._goplus_ok = True
             self.api_manager.health.record(APICallMetric(
                 api_name="goplus", success=True, latency_ms=0,
@@ -630,15 +631,17 @@ class ContractAnalyzer:
             cache_key=f"goplus:{addr}",
             cache_ttl=300,
         )
-        if result:
-            self._apply_goplus_data(info, result)
+        if result is not None:
+            if result:
+                self._apply_goplus_data(info, result)
             info._goplus_ok = True
 
     async def _resilient_check_dexscreener(self, info: TokenInfo, addr: str):
         """DexScreener through resilience manager."""
         cached = self.api_manager.cache.get(f"dexscreener:{addr}")
-        if cached:
-            self._apply_dexscreener_data(info, cached)
+        if cached is not None:
+            if cached:
+                self._apply_dexscreener_data(info, cached)
             info._dexscreener_ok = True
             self.api_manager.health.record(APICallMetric(
                 api_name="dexscreener", success=True, latency_ms=0,
@@ -650,8 +653,9 @@ class ContractAnalyzer:
             cache_key=f"dexscreener:{addr}",
             cache_ttl=30,
         )
-        if result:
-            self._apply_dexscreener_data(info, result)
+        if result is not None:
+            if result:
+                self._apply_dexscreener_data(info, result)
             info._dexscreener_ok = True
 
     async def _resilient_check_coingecko(self, info: TokenInfo, addr: str):
@@ -677,8 +681,9 @@ class ContractAnalyzer:
     async def _resilient_check_tokensniffer(self, info: TokenInfo, addr: str):
         """TokenSniffer through resilience manager."""
         cached = self.api_manager.cache.get(f"tokensniffer:{addr}")
-        if cached:
-            self._apply_tokensniffer_data(info, cached)
+        if cached is not None:
+            if cached:
+                self._apply_tokensniffer_data(info, cached)
             info._tokensniffer_ok = True
             self.api_manager.health.record(APICallMetric(
                 api_name="tokensniffer", success=True, latency_ms=0,
@@ -690,8 +695,9 @@ class ContractAnalyzer:
             cache_key=f"tokensniffer:{addr}",
             cache_ttl=300,
         )
-        if result:
-            self._apply_tokensniffer_data(info, result)
+        if result is not None:
+            if result:
+                self._apply_tokensniffer_data(info, result)
             info._tokensniffer_ok = True
 
     # ─── Raw API fetchers (return parsed dicts, no mutations) ────────
@@ -702,43 +708,43 @@ class ContractAnalyzer:
         session = await self._get_session()
         own = session is not self._session
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 if resp.status == 200:
                     return await resp.json()
-                return None
+                raise Exception(f"Honeypot HTTP {resp.status}")
         finally:
             if own:
                 await session.close()
 
     async def _fetch_goplus_raw(self, addr_lower: str) -> dict | None:
-        """Fetch GoPlus data and return the result dict for the address."""
+        """Fetch GoPlus data. Returns dict (possibly empty) on success, None on network error."""
         url = f"https://api.gopluslabs.com/api/v1/token_security/{self.chain_id}?contract_addresses={addr_lower}"
         session = await self._get_session()
         own = session is not self._session
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 if resp.status != 200:
-                    return None
+                    raise Exception(f"GoPlus HTTP {resp.status}")
                 data = await resp.json()
                 result = data.get("result", {}).get(addr_lower, {})
-                return result if result else None
+                return result  # {} if no data yet (new token)
         finally:
             if own:
                 await session.close()
 
     async def _fetch_dexscreener_raw(self, address: str) -> dict | None:
-        """Fetch DexScreener data and return best-liquidity pair dict."""
+        """Fetch DexScreener data. Returns dict (possibly empty) on success, None on network error."""
         url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
         session = await self._get_session()
         own = session is not self._session
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 if resp.status != 200:
-                    return None
+                    raise Exception(f"DexScreener HTTP {resp.status}")
                 data = await resp.json()
                 pairs = data.get("pairs") or []
                 if not pairs:
-                    return None
+                    return {}  # API OK but no pairs indexed yet
                 best = max(pairs, key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0))
                 return {"pairs_count": len(pairs), "best": best}
         finally:
@@ -753,7 +759,7 @@ class ContractAnalyzer:
         own = session is not self._session
         try:
             headers = {"accept": "application/json"}
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                 if resp.status == 404:
                     return {"listed": False, "id": ""}
                 if resp.status != 200:
@@ -765,19 +771,19 @@ class ContractAnalyzer:
                 await session.close()
 
     async def _fetch_tokensniffer_raw(self, address: str) -> dict | None:
-        """Fetch TokenSniffer data and return parsed dict."""
+        """Fetch TokenSniffer data. Returns dict (possibly empty) on success, None on network error."""
         url = (f"https://tokensniffer.com/api/v2/tokens/{self.chain_id}/{address.lower()}"
                f"?include_metrics=true&include_tests=true&block_until_ready=false")
         session = await self._get_session()
         own = session is not self._session
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 if resp.status != 200:
-                    return None
+                    raise Exception(f"TokenSniffer HTTP {resp.status}")
                 data = await resp.json()
                 score = data.get("score")
                 if score is None:
-                    return None
+                    return {}  # API OK but score not ready yet
                 return {
                     "score": int(score),
                     "is_flagged": data.get("is_flagged", False),
@@ -785,6 +791,38 @@ class ContractAnalyzer:
         finally:
             if own:
                 await session.close()
+
+    # ─── Delayed re-fetch for brand-new tokens ────────────────────────
+
+    async def _delayed_dexscreener_refetch(self, token_address: str, pair_address: str,
+                                             token_info: 'TokenInfo', native_liq: float,
+                                             usd_liq: float, block: int):
+        """
+        Wait ~8s then re-query DexScreener for a newly created token.
+        DexScreener takes a few seconds to index new pairs.
+        Emits updated token_detected if new data is found.
+        """
+        try:
+            await asyncio.sleep(8)
+            addr = token_address.lower()
+            # Invalidate stale empty cache
+            self.api_manager.cache.invalidate_prefix(f"dexscreener:{addr}")
+            fresh = await self._fetch_dexscreener_raw(token_address)
+            if fresh and fresh.get("pairs_count", 0) > 0:
+                self._apply_dexscreener_data(token_info, fresh)
+                self.api_manager.cache.set(f"dexscreener:{addr}", fresh, ttl=30)
+                # Update liquidity if on-chain was 0
+                new_dex_liq = token_info.dexscreener_liquidity
+                if new_dex_liq > usd_liq:
+                    usd_liq = new_dex_liq
+                has_liquidity = usd_liq >= self.settings["min_liquidity_usd"]
+                await self._emit("token_detected",
+                    self._build_token_event_data(token_address, pair_address, token_info,
+                                                  native_liq, usd_liq, has_liquidity, block))
+                logger.info(f"📡 DexScreener delayed refetch for {token_info.symbol}: "
+                            f"liq=${new_dex_liq:.0f} vol=${token_info.dexscreener_volume_24h:.0f}")
+        except Exception as e:
+            logger.debug(f"Delayed DexScreener refetch failed for {token_address[:16]}: {e}")
 
     # ─── Data applicators (apply cached/fresh dict → TokenInfo) ──────
 
@@ -2049,6 +2087,15 @@ class SniperBot:
         self._notify_sync_resub()  # subscribe to Sync events for this new pair
         if len(self.detected_pairs) > 200:
             self.detected_pairs = self.detected_pairs[-100:]
+
+        # Schedule delayed DexScreener re-fetch for brand-new tokens
+        if not token_info.dexscreener_pairs and token_info._dexscreener_ok:
+            asyncio.create_task(
+                self._delayed_dexscreener_refetch(
+                    new_token, pair_address, token_info,
+                    native_liq, usd_liq, block,
+                )
+            )
 
         # Emit detailed analysis for liquid tokens
         if has_liquidity:
@@ -3597,7 +3644,11 @@ class SniperBot:
                                 logger.debug(f"Log decode error: {e}")
 
                         if tasks:
-                            await asyncio.gather(*tasks, return_exceptions=True)
+                            # Fire-and-forget: analyses run in background
+                            # so the scan loop keeps scanning without waiting 9s+
+                            for coro in tasks:
+                                t = asyncio.create_task(coro)
+                                t.add_done_callback(lambda _t: _t.exception() if not _t.cancelled() and _t.exception() else None)
                     else:
                         await self._emit("scan_error", {
                             "message": f"All RPCs failed for blocks {from_block}-{to_block}: {last_rpc_err}",
