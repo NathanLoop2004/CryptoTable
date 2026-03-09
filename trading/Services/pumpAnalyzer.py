@@ -129,7 +129,21 @@ class PumpAnalyzer:
             pair_liquidity_usd: Current liquidity in USD
             pair_address: DEX pair address for on-chain reads
         """
-        ps = PumpScore(token_address=token_info.address)
+        ps = PumpScore(token_address=getattr(token_info, 'address', ''))
+
+        try:
+            return await self._analyze_inner(ps, token_info, pair_liquidity_usd, pair_address)
+        except Exception as e:
+            # Absolute safety net — NEVER propagate exception
+            logger.error(f"PumpAnalyzer.analyze() crashed: {e}", exc_info=True)
+            ps.signals.append(f"⚠️ Error general: {str(e)[:80]}")
+            ps.grade = "AVOID"
+            return ps
+
+    async def _analyze_inner(self, ps: PumpScore, token_info,
+                             pair_liquidity_usd: float,
+                             pair_address: str) -> PumpScore:
+        """Internal analysis — wrapped by analyze() for safety."""
         addr = token_info.address.lower()
 
         # ── Record snapshot for growth tracking ──
@@ -147,35 +161,36 @@ class PumpAnalyzer:
         if addr not in self._initial_liquidity and pair_liquidity_usd > 0:
             self._initial_liquidity[addr] = pair_liquidity_usd
 
-        # 1. Liquidity Score — sweet spot is $8k–$120k
-        ps.liquidity_score = self._score_liquidity(pair_liquidity_usd, ps)
+        # Run each scoring component safely — one failure must not kill the rest
+        components = [
+            ("liquidity",     lambda: self._score_liquidity(pair_liquidity_usd, ps)),
+            ("holder",        lambda: self._score_holders(token_info, ps)),
+            ("activity",      lambda: self._score_activity(token_info, ps)),
+            ("whale",         lambda: self._score_whale(token_info, ps)),
+            ("momentum",      lambda: self._score_momentum(token_info, ps)),
+            ("age",           lambda: self._score_age(token_info, ps)),
+            ("social",        lambda: self._score_social(token_info, ps)),
+            ("mcap",          lambda: self._score_market_cap(token_info, pair_liquidity_usd, ps)),
+            ("holder_growth", lambda: self._score_holder_growth(token_info, ps)),
+            ("lp_growth",     lambda: self._score_lp_growth(pair_liquidity_usd, token_info, ps)),
+        ]
 
-        # 2. Holder Distribution Score
-        ps.holder_score = self._score_holders(token_info, ps)
+        attr_map = {
+            "liquidity": "liquidity_score", "holder": "holder_score",
+            "activity": "activity_score",   "whale": "whale_score",
+            "momentum": "momentum_score",   "age": "age_score",
+            "social": "social_score",        "mcap": "mcap_score",
+            "holder_growth": "holder_growth_score", "lp_growth": "lp_growth_score",
+        }
 
-        # 3. Trading Activity Score (buy/sell ratio, volume)
-        ps.activity_score = self._score_activity(token_info, ps)
-
-        # 4. Whale Score (large holder accumulation patterns)
-        ps.whale_score = self._score_whale(token_info, ps)
-
-        # 5. Momentum Score (price changes)
-        ps.momentum_score = self._score_momentum(token_info, ps)
-
-        # 6. Age Score (fresh tokens = more potential)
-        ps.age_score = self._score_age(token_info, ps)
-
-        # 7. Social Score (website, socials, CoinGecko)
-        ps.social_score = self._score_social(token_info, ps)
-
-        # 8. Market Cap Score (v3) — ideal range $20k–$400k
-        ps.mcap_score = self._score_market_cap(token_info, pair_liquidity_usd, ps)
-
-        # 9. Holder Growth Rate Score (v3) — tracks growth over time
-        ps.holder_growth_score = self._score_holder_growth(token_info, ps)
-
-        # 10. Liquidity Growth Score (v3) — LP increasing = confidence
-        ps.lp_growth_score = self._score_lp_growth(pair_liquidity_usd, token_info, ps)
+        for name, scorer in components:
+            try:
+                value = scorer()
+                setattr(ps, attr_map[name], value)
+            except Exception as e:
+                logger.warning(f"PumpScore component '{name}' failed for {token_info.address}: {e}")
+                setattr(ps, attr_map[name], 40)  # neutral fallback
+                ps.signals.append(f"⚠️ {name}: error de cálculo")
 
         # Weighted total
         ps.total_score = round(

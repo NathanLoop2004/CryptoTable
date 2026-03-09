@@ -1185,26 +1185,43 @@ class SniperBot:
 
     # ─── Liquidity check ────────────────────────────────────
     async def _get_pair_liquidity(self, pair_address: str) -> tuple[float, float]:
-        """Get liquidity in native token and USD (async-friendly)."""
+        """Get liquidity in native token and USD with RPC retry."""
         loop = asyncio.get_event_loop()
-        try:
-            pair_cs = Web3.to_checksum_address(pair_address)
-            pair_contract = self.w3.eth.contract(address=pair_cs, abi=PAIR_ABI)
+        max_attempts = min(3, len(self._rpc_list))
+        last_err = None
 
-            reserves = await loop.run_in_executor(None, pair_contract.functions.getReserves().call)
-            token0 = await loop.run_in_executor(None, pair_contract.functions.token0().call)
+        for attempt in range(max_attempts):
+            try:
+                pair_cs = Web3.to_checksum_address(pair_address)
+                pair_contract = self.w3.eth.contract(address=pair_cs, abi=PAIR_ABI)
 
-            weth_cs = Web3.to_checksum_address(self.weth)
-            if token0.lower() == weth_cs.lower():
-                native_reserve = reserves[0] / 1e18
-            else:
-                native_reserve = reserves[1] / 1e18
+                reserves = await loop.run_in_executor(None, pair_contract.functions.getReserves().call)
+                token0 = await loop.run_in_executor(None, pair_contract.functions.token0().call)
 
-            usd_value = native_reserve * self.native_price_usd * 2  # both sides
-            return native_reserve, usd_value
-        except Exception as e:
-            logger.debug(f"Liquidity check failed: {e}")
-            return 0, 0
+                weth_cs = Web3.to_checksum_address(self.weth)
+                if token0.lower() == weth_cs.lower():
+                    native_reserve = reserves[0] / 1e18
+                else:
+                    native_reserve = reserves[1] / 1e18
+
+                # Guard: if native_price_usd is 0, try fetching it again
+                if self.native_price_usd <= 0:
+                    await self._fetch_native_price()
+
+                usd_value = native_reserve * self.native_price_usd * 2  # both sides
+                return native_reserve, usd_value
+            except Exception as e:
+                last_err = e
+                logger.debug(f"Liquidity check attempt {attempt+1}/{max_attempts} failed: {e}")
+                # Rotate to next RPC and retry
+                self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
+                new_rpc = self._rpc_list[self._rpc_index]
+                self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                await asyncio.sleep(0.5)
+
+        logger.warning(f"Liquidity check failed after {max_attempts} attempts for {pair_address}: {last_err}")
+        return 0, 0
 
     # ─── Token price via router ─────────────────────────────
     async def _get_token_price_usd(self, token_address: str) -> float:
@@ -1347,21 +1364,22 @@ class SniperBot:
 
     # ─── Refresh detected tokens (periodic re-check) ───────
     async def _enrich_detected_tokens(self, fast_only: bool = False):
-        """Re-check liquidity and retry ALL failed APIs for recently detected tokens.
-        Emits 'token_updated' for every token so the frontend stays current.
+        """Re-check liquidity and retry failed APIs for recently detected tokens.
+        Only emits 'token_updated' if data actually changed.
 
         fast_only=True  → only process tokens with incomplete API data (quick retry)
         fast_only=False → process ALL tokens (full refresh including DexScreener prices)
         """
+        now = time.time()
         all_pairs = self.detected_pairs[-50:]
         if not all_pairs:
             return
 
         if fast_only:
-            # Only tokens that still have failed APIs
+            # Only tokens that still have failed APIs AND aren't too old (< 5 min)
             candidates = [
                 p for p in all_pairs
-                if p.token_info and not all([
+                if p.token_info and (now - p.timestamp < 300) and not all([
                     p.token_info._goplus_ok,
                     p.token_info._honeypot_ok,
                     p.token_info._dexscreener_ok,
@@ -1372,7 +1390,10 @@ class SniperBot:
             if not candidates:
                 return
         else:
-            candidates = all_pairs
+            # Full refresh: only tokens from the last 10 minutes
+            candidates = [p for p in all_pairs if now - p.timestamp < 600]
+            if not candidates:
+                return
 
         sem = asyncio.Semaphore(3)
 
@@ -1388,7 +1409,7 @@ class SniperBot:
                     # Re-check on-chain liquidity
                     native_liq, usd_liq = await self._get_pair_liquidity(pair_addr)
 
-                    # Retry failed APIs + always refresh DexScreener for live data
+                    # Retry failed APIs (skip DexScreener re-check if it already succeeded and liq is 0)
                     retry_tasks = []
                     if not info._goplus_ok:
                         retry_tasks.append(self.analyzer._check_goplus_api(info))
@@ -1399,8 +1420,9 @@ class SniperBot:
                     if not info._tokensniffer_ok:
                         retry_tasks.append(self.analyzer._check_tokensniffer_api(info))
 
-                    # Always re-check DexScreener (fresh price/volume/liquidity)
-                    retry_tasks.append(self.analyzer._check_dexscreener_api(info))
+                    # Re-check DexScreener only if it hasn't worked yet or on slow refresh
+                    if not info._dexscreener_ok or not fast_only:
+                        retry_tasks.append(self.analyzer._check_dexscreener_api(info))
 
                     if retry_tasks:
                         logger.debug(f"Enriching {info.symbol}: {len(retry_tasks)} API(s)")
@@ -1411,6 +1433,9 @@ class SniperBot:
                         usd_liq = info.dexscreener_liquidity
 
                     old_liq = pair.liquidity_usd
+                    old_risk = info.risk
+                    old_api_count = sum([info._goplus_ok, info._honeypot_ok, info._dexscreener_ok, info._coingecko_ok, info._tokensniffer_ok])
+
                     pair.liquidity_native = native_liq
                     pair.liquidity_usd = usd_liq
 
@@ -1421,12 +1446,19 @@ class SniperBot:
                         info.risk_reasons = self.analyzer._rebuild_flag_reasons(info)
                         self.analyzer._calculate_risk(info)
 
-                        event_data = self._build_token_event_data(
-                            token, pair_addr, info,
-                            native_liq, usd_liq, has_liquidity,
-                            pair.block_number,
-                        )
-                        await self._emit("token_updated", event_data)
+                        # Only emit token_updated if something actually changed
+                        new_api_count = sum([info._goplus_ok, info._honeypot_ok, info._dexscreener_ok, info._coingecko_ok, info._tokensniffer_ok])
+                        liq_changed = abs(usd_liq - old_liq) > 1.0
+                        risk_changed = info.risk != old_risk
+                        apis_changed = new_api_count != old_api_count
+
+                        if liq_changed or risk_changed or apis_changed:
+                            event_data = self._build_token_event_data(
+                                token, pair_addr, info,
+                                native_liq, usd_liq, has_liquidity,
+                                pair.block_number,
+                            )
+                            await self._emit("token_updated", event_data)
 
                         # If liquidity just appeared and token passes safety, emit opportunity
                         if has_liquidity and old_liq < self.settings["min_liquidity_usd"]:
@@ -1572,24 +1604,22 @@ class SniperBot:
         if len(self.detected_pairs) > 200:
             self.detected_pairs = self.detected_pairs[-100:]
 
-        if not has_liquidity:
-            return
+        # Emit detailed analysis for liquid tokens
+        if has_liquidity:
+            await self._emit("contract_analysis", {
+                "token": new_token,
+                "symbol": token_info.symbol,
+                "name": token_info.name,
+                "risk": token_info.risk,
+                "buy_tax": token_info.buy_tax,
+                "sell_tax": token_info.sell_tax,
+                "is_honeypot": token_info.is_honeypot,
+                "has_owner": token_info.has_owner,
+                "risk_reasons": token_info.risk_reasons,
+                "liquidity_usd": round(usd_liq, 2),
+            })
 
-        # Emit detailed analysis only for liquid tokens
-        await self._emit("contract_analysis", {
-            "token": new_token,
-            "symbol": token_info.symbol,
-            "name": token_info.name,
-            "risk": token_info.risk,
-            "buy_tax": token_info.buy_tax,
-            "sell_tax": token_info.sell_tax,
-            "is_honeypot": token_info.is_honeypot,
-            "has_owner": token_info.has_owner,
-            "risk_reasons": token_info.risk_reasons,
-            "liquidity_usd": round(usd_liq, 2),
-        })
-
-        # ── Professional v2: parallel deep analysis ──
+        # ── Professional v2: parallel deep analysis (runs for ALL tokens) ──
         try:
             v2_tasks = []
             # Pump score analysis (no extra API calls — uses existing TokenInfo)
@@ -1625,6 +1655,13 @@ class SniperBot:
                         token_info.pump_score = result.total_score
                         token_info.pump_grade = result.grade
                         token_info.pump_signals = result.signals
+                        # v3 fields — extract from the same result (no double call)
+                        token_info.pump_mcap_score = getattr(result, 'mcap_score', 0)
+                        token_info.pump_market_cap_usd = getattr(result, 'market_cap_usd', 0.0)
+                        token_info.pump_holder_growth_rate = getattr(result, 'holder_growth_rate', 0.0)
+                        token_info.pump_lp_growth_percent = getattr(result, 'lp_growth_percent', 0.0)
+                        token_info.pump_holder_growth_score = getattr(result, 'holder_growth_score', 0)
+                        token_info.pump_lp_growth_score = getattr(result, 'lp_growth_score', 0)
                     elif label == "sim" and result:
                         token_info.sim_can_buy = result.can_buy
                         token_info.sim_can_sell = result.can_sell
@@ -1649,20 +1686,7 @@ class SniperBot:
                             max(s.confidence for s in result) / 100.0 if result else 0.0
                         )
 
-                # ── Professional v3: populate pump v3 extra fields ──
-                if self.settings.get("enable_pump_score", True) and token_info.pump_score > 0:
-                    # Re-fetch the pump result to extract v3 fields
-                    try:
-                        pump_result = await self.pump_analyzer.analyze(token_info, usd_liq, pair_address)
-                        if pump_result:
-                            token_info.pump_mcap_score = pump_result.mcap_score
-                            token_info.pump_market_cap_usd = pump_result.market_cap_usd
-                            token_info.pump_holder_growth_rate = pump_result.holder_growth_rate
-                            token_info.pump_lp_growth_percent = pump_result.lp_growth_percent
-                            token_info.pump_holder_growth_score = pump_result.holder_growth_score
-                            token_info.pump_lp_growth_score = pump_result.lp_growth_score
-                    except Exception as e:
-                        logger.debug(f"v3 pump extras failed for {token_info.symbol}: {e}")
+                # (v3 pump fields already extracted above — no redundant double call)
 
                 # ── Professional v3: Dev Tracker ──
                 dev_result = None
@@ -1740,7 +1764,7 @@ class SniperBot:
                 if self.settings.get("enable_trade_executor", False) and self.trade_executor:
                     token_info.backend_buy_available = True
 
-                # Re-emit token_detected with updated v2+v3 data
+                # Re-emit token_detected with updated v2+v3 data (always, not just liquid)
                 await self._emit("token_detected",
                     self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
                 )
@@ -2238,12 +2262,17 @@ class SniperBot:
         # ── Professional v2: launch background monitoring tasks ──
         if self.settings.get("enable_mempool", False) and self.mempool_listener:
             async def _mempool_event_cb(event):
+                # Skip unknown methods — they're noise for the UI
+                if event.method.startswith("unknown_"):
+                    return
                 await self._emit("mempool_event", {
-                    "type": event.method,
+                    "method": event.method,
                     "token": event.token_address,
                     "tx_hash": event.tx_hash,
-                    "method": event.method,
-                    "value_bnb": event.value_native,
+                    "value_bnb": round(event.value_native, 4),
+                    "from": event.from_address[:10] + "..." if event.from_address else "",
+                    "gas_gwei": round(event.gas_price_gwei, 1),
+                    "total_detected": self.mempool_listener.events_detected if self.mempool_listener else 0,
                 })
             self.mempool_listener.set_callbacks(_mempool_event_cb, self._emit)
             self._mempool_task = asyncio.ensure_future(self.mempool_listener.run())
@@ -2363,7 +2392,7 @@ class SniperBot:
                             # v4: record RPC error
                             self.resource_monitor.record_rpc_call(
                                 (time.time() - _pipeline_start) * 1000 if '_pipeline_start' in dir() else 0,
-                                success=False,
+                                error=True,
                             )
                             if is_rate_limit:
                                 _is_429_cycle = True

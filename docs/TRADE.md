@@ -1,538 +1,512 @@
-# 📊 TradingWeb — Módulo de Trade
+# Trading Dashboard — Documentación Técnica
+
+Documentación del módulo de **Trading** de TradingWeb: panel estilo Binance con gráficas en tiempo real, order book, historial de trades, gestión de wallet, y ejecución de DEX swaps.
+
+---
 
 ## Índice
 
-1. [Descripción General](#descripción-general)
-2. [Arquitectura](#arquitectura)
-3. [Stack Tecnológico](#stack-tecnológico)
-4. [Flujo de Datos](#flujo-de-datos)
-5. [Páginas y Rutas](#páginas-y-rutas)
-6. [Dashboard (Trade)](#dashboard-trade)
-7. [Wallet](#wallet)
-8. [Transactions](#transactions)
-9. [WebSocket — Datos en Tiempo Real](#websocket--datos-en-tiempo-real)
-10. [DEX Swap (Buy / Sell)](#dex-swap-buy--sell)
-11. [Comprar Crypto (Fiat On-Ramp)](#comprar-crypto-fiat-on-ramp)
-12. [Estructura de Archivos](#estructura-de-archivos)
-13. [Diagrama de Flujo](#diagrama-de-flujo)
+1. [Arquitectura](#1-arquitectura)
+2. [Dashboard de trading](#2-dashboard-de-trading)
+3. [WebSocket Binance](#3-websocket-binance)
+4. [Wallet](#4-wallet)
+5. [DEX Swaps](#5-dex-swaps)
+6. [Transacciones](#6-transacciones)
+7. [Autenticación Trust Wallet](#7-autenticación-trust-wallet)
+8. [Frontend](#8-frontend)
+9. [Estilos](#9-estilos)
+10. [Endpoints API](#10-endpoints-api)
 
 ---
 
-## Descripción General
+## 1. Arquitectura
 
-El módulo **Trade** es el core de TradingWeb. Proporciona una interfaz estilo Binance para:
+### Archivos del módulo Trading
 
-- **Visualizar** datos de mercado en tiempo real (precios, velas, order book, trades).
-- **Ejecutar** operaciones de compra/venta directamente desde la wallet conectada via DEX (PancakeSwap en BSC, Uniswap en Ethereum).
-- **Gestionar** la wallet: ver balances, enviar tokens nativos y ERC-20, hacer swaps.
-- **Comprar crypto** con tarjeta/banco a través de proveedores fiat (Binance, Changelly, ChangeNOW).
+| Archivo | Líneas | Rol |
+|---|---|---|
+| `static/js/dashboard.js` | 2,184 | Lógica completa del dashboard |
+| `static/js/pageWallet.js` | 311 | Gestión de wallet |
+| `static/js/transactions.js` | 282 | Historial de transacciones |
+| `static/js/walletConnect.js` | 185 | Trust Wallet / MetaMask connection |
+| `static/css/main.css` | 2,569 | Estilos Binance dark theme |
+| `templates/dashboard.html` | 435 | Template del panel de trading |
+| `templates/wallet.html` | 172 | Template de wallet |
+| `templates/transactions.html` | 123 | Template de transacciones |
+| `templates/login.html` | 63 | Template de login |
+| `templates/base.html` | — | Template base (navbar + footer) |
+| `Controllers/viewController.py` | — | Renders de páginas HTML |
+| `Controllers/walletController.py` | — | API endpoints wallet |
+| `Services/walletService.py` | 139 | Lógica de wallet |
+| `Models/walletSessionModel.py` | — | Modelo de sesión de wallet |
+| `WebSocket/binanceConsumer.py` | 148 | Consumer Binance WebSocket |
+| `WebSocket/walletConsumer.py` | 140 | Consumer wallet events |
+| `Routes/urls.py` | — | URL patterns de la app |
+| `Routes/walletRouter.py` | — | Rutas API wallet |
 
----
-
-## Arquitectura
+### Diagrama de flujo
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      FRONTEND (Browser)                      │
-│                                                              │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │ login.html│  │dashboard.html│  │  wallet.html │           │
-│  │           │  │              │  │              │           │
-│  │walletCon- │  │ dashboard.js │  │ pageWallet.js│           │
-│  │ nect.js   │  │transactions.js│  │              │           │
-│  └─────┬─────┘  └──────┬───────┘  └──────┬───────┘           │
-│        │               │                 │                   │
-│        │    ethers.js (BrowserProvider)   │                   │
-│        │    TradingView Lightweight Charts│                   │
-│        └───────────┬───┴─────────────────┘                   │
-│                    │ WebSocket                                │
-├────────────────────┼─────────────────────────────────────────┤
-│                    │       BACKEND (Django + Channels)        │
-│                    ▼                                         │
-│  ┌──────────────────────────────────┐                        │
-│  │  Daphne ASGI Server (:8000)      │                        │
-│  │                                  │                        │
-│  │  ┌────────────────────────────┐  │                        │
-│  │  │ BinanceConsumer (ws/binance)│  │ ← Binance WebSocket   │
-│  │  │ WalletConsumer  (ws/wallet) │  │ ← Wallet events       │
-│  │  └────────────────────────────┘  │                        │
-│  │                                  │                        │
-│  │  ┌────────────────────────────┐  │                        │
-│  │  │ ViewController             │  │ ← HTTP page renders    │
-│  │  └────────────────────────────┘  │                        │
-│  └──────────────────────────────────┘                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Stack Tecnológico
-
-| Componente       | Tecnología                                          |
-|------------------|-----------------------------------------------------|
-| **Backend**      | Django 6.0.2, Python 3.14                           |
-| **ASGI Server**  | Daphne 4.2.1                                        |
-| **WebSocket**    | Django Channels 4.3.2                               |
-| **Blockchain**   | ethers.js 6.13.4 (frontend), web3.py (backend)     |
-| **Charts**       | TradingView Lightweight Charts 4.1.3                |
-| **Datos**        | Binance WebSocket API (streams en tiempo real)      |
-| **DEX**          | PancakeSwap V2 (BSC), Uniswap V2 (Ethereum)        |
-| **Wallet**       | Trust Wallet / MetaMask (via `window.ethereum`)     |
-
----
-
-## Flujo de Datos
-
-```
-Usuario conecta wallet (Trust Wallet / MetaMask)
+┌────────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│   dashboard.html   │◄────│   binanceConsumer.py  │◄────│  Binance WS API │
+│   dashboard.js     │────►│   (148 líneas)        │────►│  stream.binance │
+│   (2,184 + 435 ln) │     └──────────────────────┘     └─────────────────┘
+└────────────────────┘
         │
         ▼
-Login page ──► Detecta provider (window.ethereum)
-        │       Solicita eth_requestAccounts
-        │       Obtiene address + chainId
-        │       Guarda en localStorage
+┌────────────────────┐     ┌──────────────────────┐
+│   wallet.html      │◄────│   walletConsumer.py   │
+│   pageWallet.js    │────►│   (140 líneas)        │
+│   (311 + 172 ln)   │     └──────────────────────┘
+└────────────────────┘
+        │
         ▼
-Dashboard ──► Carga ethers.js BrowserProvider
-        │     Reconecta wallet desde localStorage
-        │     Abre WebSocket ws/binance/
-        │     Abre WebSocket ws/wallet/
-        │
-        ├── ws/binance/ ──► Binance streams (kline, trade, depth, ticker)
-        │                    Actualiza chart, order book, market trades
-        │
-        ├── ws/wallet/ ──► Balance updates, block number, gas price
-        │                   Token holdings, wallet events
-        │
-        └── DEX Swap ──► ethers.js → PancakeSwap/Uniswap Router
-                         swapExactETHForTokens (Buy)
-                         swapExactTokensForETH (Sell)
+┌────────────────────┐     ┌──────────────────────┐
+│   login.html       │────►│   walletController.py │
+│   walletConnect.js │     │   walletService.py    │
+│   (63 + 185 ln)    │     └──────────────────────┘
+└────────────────────┘
 ```
 
 ---
 
-## Páginas y Rutas
+## 2. Dashboard de trading
 
-### URLs (HTTP)
+### Componentes del dashboard
 
-| Ruta             | Vista                          | Descripción                 |
-|------------------|--------------------------------|-----------------------------|
-| `/`              | `ViewController.login`         | Login / Home — Conectar wallet |
-| `/dashboard/`    | `ViewController.dashboard`     | Dashboard de trading principal |
-| `/transactions/` | `ViewController.transactions`  | Página de transacciones      |
-| `/wallet/`       | `ViewController.wallet_page`   | Información completa de wallet |
-| `/sniper/`       | `ViewController.sniper_page`   | Sniper Bot (ver doc separada)|
+El dashboard replica la interfaz de Binance con los siguientes paneles:
 
-### WebSocket Endpoints
+| Panel | Descripción |
+|---|---|
+| **Price Header** | Par actual, precio, cambio 24h, high/low, volumen |
+| **Chart Area** | Gráfica de velas (TradingView widget o DOM mini-bars) |
+| **Order Book** | Libro de órdenes buy/sell en tiempo real |
+| **Trade History** | Últimos trades ejecutados en el mercado |
+| **Order Form** | Formulario de compra/venta (Limit, Market, Stop) |
+| **Open Orders** | Órdenes abiertas del usuario |
+| **Pair Selector** | Selector de par BTC/USDT, ETH/USDT, etc. |
+| **Balance** | Balance del usuario en la wallet conectada |
 
-| Ruta            | Consumer           | Descripción                     |
-|-----------------|--------------------|---------------------------------|
-| `ws/binance/`   | `BinanceConsumer`  | Stream de datos de Binance      |
-| `ws/wallet/`    | `WalletConsumer`   | Eventos de wallet en tiempo real|
+### Datos en tiempo real
 
----
-
-## Dashboard (Trade)
-
-**Archivo:** `trading/templates/dashboard.html` + `trading/static/js/dashboard.js`
-
-### Layout (Grid estilo Binance)
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  TOPBAR: Logo │ Trade │ Transactions │ Wallet │ Sniper │ WS  │
-├──────────────────────────────────────────────────────────────┤
-│  PAIR BAR: Search │ Coin Icon │ Price │ 24h Stats │ Stream   │
-├────────────────┬──────────────┬───────────────────────────────┤
-│                │              │                               │
-│   CHART        │  ORDER BOOK  │   BUY / SELL                 │
-│   (TradingView │  Asks        │   Side tabs (Buy/Sell)       │
-│    Candles/    │  Spread      │   Price input                │
-│    Line)       │  Bids        │   Amount input               │
-│                │              │   % buttons (25/50/75/100)   │
-│   Timeframes:  │              │   Slippage selector          │
-│   1m 5m 15m    │              │   Est. Output                │
-│   1H 4H 1D 1W │              │   Native balance             │
-│                │              │   Cost (swap + gas)          │
-│                │              │   [Confirm Button]           │
-│◄──resizer──►   │◄──resizer──► │                              │
-├────────────────┴──────────────┴──────────────────────────────┤
-│◄────────────────── resizer vertical ────────────────────────►│
-├─────────────────────────────┬────────────────────────────────┤
-│  BOTTOM LEFT                │  BOTTOM RIGHT                  │
-│  Tabs: Market Trades │      │  Tabs: Transactions │          │
-│        Live Feed │          │        Wallet Info             │
-│        Watchlist            │                                │
-│  Market Trades: Price,      │  TX: Send Native │             │
-│    Amount, Time             │      Send Token │              │
-│                             │      Swap                      │
-│  Live Feed: Raw WS data    │                                │
-│  Watchlist: Price cards     │  Wallet: Account, Network,    │
-│                             │    Balances, Tokens            │
-└─────────────────────────────┴────────────────────────────────┘
-```
-
-### Funcionalidades Principales
-
-#### 1. Búsqueda de Pares
-- Input con autocompletado que busca en todos los pares de Binance.
-- Muestra icono de la moneda (via CoinGecko/CryptoCompare CDN).
-- Al seleccionar un par, se subscribe automáticamente al stream de klines.
-
-#### 2. Chart (Gráfico de Velas)
-- **TradingView Lightweight Charts** renderiza candlestick o line chart.
-- **Timeframes**: 1m, 5m, 15m, 1H, 4H, 1D, 1W.
-- Toolbar muestra OHLC (Open-High-Low-Close) del crosshair.
-- Carga datos históricos via Binance REST API (`/api/v3/klines`).
-- Actualización en tiempo real via `kline_Xm` WebSocket stream.
-
-#### 3. Order Book
-- Visualización de asks (rojo, arriba) y bids (verde, abajo).
-- Spread en el centro.
-- Barras de profundidad con gradiente proporcional al volumen.
-- Datos via `depth@100ms` Binance stream.
-
-#### 4. Buy / Sell (DEX Swap)
-- **Tabs**: Buy (verde) / Sell (rojo).
-- **Precio**: Sincronizable con el precio de mercado (botón ↻ Market).
-- **Amount**: Input manual + botones de porcentaje (25%, 50%, 75%, 100%).
-- **Slippage**: Selector 0.5% / 1% / 3% + input custom.
-- **Estimación**: Llama `getAmountsOut()` del router para estimar output.
-- **Costo**: Muestra swap cost + gas fee estimado en tokens nativos.
-- **Balance**: Muestra saldo disponible en BNB/ETH.
-- **Modal de confirmación**: Side, Pair, Amount In, Est. Output, USD Value, Slippage, DEX.
-- **Ejecución**: 
-  - **Buy**: `swapExactETHForTokensSupportingFeeOnTransferTokens()` via ethers.js.
-  - **Sell**: Approve token → `swapExactTokensForETHSupportingFeeOnTransferTokens()`.
-
-#### 5. Streams Activos
-- Badges que muestran qué streams están activos (trade, kline, depth, ticker, etc.).
-- Botones Sub/Unsub para controlar subscripciones individualmente.
-
-#### 6. Market Trades
-- Lista en tiempo real de trades ejecutados en el par seleccionado.
-- Precio, Amount, Timestamp con color verde/rojo según dirección.
-
-#### 7. Paneles Redimensionables
-- Resizers verticales y horizontales (`resizer-col`, `resizer-row`).
-- Drag para ajustar tamaños de chart, order book, y paneles.
-
----
-
-## Wallet
-
-**Archivo:** `trading/templates/wallet.html` + `trading/static/js/pageWallet.js`
-
-### Secciones
-
-#### 1. Account Info
-| Campo       | Descripción                              |
-|-------------|------------------------------------------|
-| Address     | Dirección completa (click to copy)       |
-| Provider    | "Trust Wallet" / "MetaMask" / etc.       |
-| Status      | "Connected" / "Disconnected"             |
-| Connected   | Timestamp de conexión                    |
-
-#### 2. Network Info
-| Campo       | Descripción                              |
-|-------------|------------------------------------------|
-| Network     | "BNB Smart Chain" / "Ethereum" / etc.    |
-| Chain ID    | 56, 1, 97, etc.                          |
-| Block #     | Último bloque conocido                   |
-| Gas Price   | Precio actual del gas en Gwei            |
-
-#### 3. Balances
-- **Balance Nativo**: Monto en BNB/ETH con valor en USD.
-- Precio obtenido de Binance REST API (`/api/v3/ticker/price`).
-
-#### 4. 💳 Buy Crypto (Fiat On-Ramp)
-- Selector de monto en USD ($10, $20, $50, $100 + input custom).
-- Estimación de tokens a recibir basada en precio actual.
-- **Proveedores** (links públicos, sin API key):
-
-| Proveedor  | URL Pattern                                      | Métodos       |
-|------------|--------------------------------------------------|---------------|
-| Binance    | `binance.com/en/crypto/buy/{slug}`               | Card/P2P/Bank |
-| Changelly  | `changelly.com/buy/{slug}`                       | Visa/MC       |
-| ChangeNOW  | `changenow.io/exchange?to={slug}`                | Crypto swap   |
-
-- **NETWORK_MAP** define slugs por chainId:
+El dashboard recibe datos via WebSocket desde Binance:
 
 ```javascript
-const NETWORK_MAP = {
-    "0x38": { name: "BNB Smart Chain", symbol: "BNB", ..., binSlug: "BNB", chgSlug: "bnb", cnTo: "bnb" },
-    "0x1":  { name: "Ethereum",        symbol: "ETH", ..., binSlug: "ETH", chgSlug: "eth", cnTo: "eth" },
-    // ... más redes
+// dashboard.js
+const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${pair}@kline_1m`);
+
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    updatePrice(data.k.c);       // Precio de cierre
+    updateVolume(data.k.v);      // Volumen
+    updateCandlestick(data.k);   // Vela OHLC
 };
 ```
 
-#### 5. 📥 Deposit
-- **QR Code** generado dinámicamente con la dirección de la wallet.
-- **Dirección copiable** con botón "Copy".
-- **Advertencia** sobre enviar tokens en la red correcta (BEP-20, ERC-20, etc.).
+### Mini-bars (optimización)
 
-#### 6. Token Holdings
-- Tabla de tokens ERC-20 con balance y dirección de contrato.
-- Refrescable manualmente con botón ↻.
+En lugar de cargar Chart.js (~200KB), el dashboard usa mini-bars DOM:
 
-#### 7. Wallet Events
-- Feed en tiempo real de eventos (cambios de cuenta, cambios de red, etc.).
+```javascript
+function renderMiniBars(prices) {
+    const container = document.querySelector('.mini-chart');
+    container.innerHTML = '';
+    const max = Math.max(...prices);
+    const min = Math.min(...prices);
 
----
-
-## Transactions
-
-**Archivo:** `trading/templates/transactions.html` + `trading/static/js/transactions.js`
-
-### Tabs de Transacciones
-
-#### 1. Send Native (BNB/ETH)
-- **Recipient**: Input de dirección `0x…`.
-- **Amount**: Input numérico con símbolo de la moneda nativa.
-- Ejecuta `signer.sendTransaction({ to, value })` via ethers.js.
-
-#### 2. Send Token (ERC-20)
-- **Token Contract**: Input de dirección del contrato ERC-20.
-- Auto-detecta nombre, símbolo y decimales del token.
-- **Recipient** + **Amount**.
-- Ejecuta `contract.transfer(to, amount)` via ethers.js.
-
-#### 3. Swap
-- **From**: Dirección del token de origen (vacío = nativo).
-- **To Token**: Dirección del token de destino.
-- **Amount** + **Slippage**.
-- Estimación de output via `getAmountsOut()`.
-- Ejecuta swap via router del DEX.
-
----
-
-## WebSocket — Datos en Tiempo Real
-
-### ws/binance/ (BinanceConsumer)
-
-Streams disponibles de Binance:
-
-| Stream          | Descripción                          | Datos               |
-|-----------------|--------------------------------------|----------------------|
-| `trade`         | Trades individuales                  | price, qty, time     |
-| `kline_1m`      | Velas de 1 minuto                    | OHLCV                |
-| `kline_5m`      | Velas de 5 minutos                   | OHLCV                |
-| `kline_1h`      | Velas de 1 hora                      | OHLCV                |
-| `ticker`        | Ticker 24h completo                  | price, change, vol   |
-| `miniTicker`    | Ticker 24h resumido                  | price, change        |
-| `depth@100ms`   | Order book incremental               | bids, asks           |
-
-**Protocolo de mensajes**:
-```json
-// Subscribe
-{ "action": "subscribe", "symbol": "btcusdt", "stream": "kline_1m" }
-
-// Unsubscribe
-{ "action": "unsubscribe", "symbol": "btcusdt", "stream": "kline_1m" }
+    prices.forEach(price => {
+        const bar = document.createElement('div');
+        bar.className = 'mini-bar';
+        const height = ((price - min) / (max - min)) * 100;
+        bar.style.height = `${Math.max(2, height)}%`;
+        bar.style.backgroundColor = price >= prices[0]
+            ? 'var(--clr-up)' : 'var(--clr-down)';
+        container.appendChild(bar);
+    });
+}
 ```
 
-### ws/wallet/ (WalletConsumer)
+### Auto-refresh
 
-Emite actualizaciones de:
-- Balance nativo
-- Número de bloque
-- Precio del gas
-- Token holdings
-- Eventos de cambio de cuenta/red
-
----
-
-## DEX Swap (Buy / Sell)
-
-### Contratos DEX
-
-| Chain | DEX          | Router Address                              |
-|-------|-------------|---------------------------------------------|
-| BSC   | PancakeSwap | `0x10ED43C718714eb63d5aA57B78B54704E256024E` |
-| ETH   | Uniswap V2  | `0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D` |
-
-| Chain | WETH/WBNB                                     |
-|-------|------------------------------------------------|
-| BSC   | `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c`  |
-| ETH   | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2`  |
-
-### Flujo de Compra (Buy)
-
-```
-1. Usuario ingresa precio + cantidad
-2. Frontend calcula total (price × amount)
-3. Llama getAmountsOut([WBNB, TokenAddress]) para estimar output
-4. Muestra modal de confirmación
-5. Usuario confirma
-6. Ejecuta swapExactETHForTokensSupportingFeeOnTransferTokens({
-       amountOutMin: output × (1 - slippage),
-       path: [WBNB, tokenAddress],
-       to: wallet.address,
-       deadline: block.timestamp + 300,
-       value: amountInWei
-   })
-7. Espera confirmación de TX
-8. Muestra hash de transacción + link al explorer
-```
-
-### Flujo de Venta (Sell)
-
-```
-1. Primero: approve() el token al Router
-2. Luego: swapExactTokensForETHSupportingFeeOnTransferTokens({
-       amountIn: tokenAmount,
-       amountOutMin: output × (1 - slippage),
-       path: [tokenAddress, WBNB],
-       to: wallet.address,
-       deadline: block.timestamp + 300
-   })
-```
-
-### Manejo de Errores
-
-| Error                | Causa                              | Solución                          |
-|----------------------|------------------------------------|-----------------------------------|
-| `CALL_EXCEPTION`     | Función del contrato falla         | Verificar ABI y parámetros        |
-| `NETWORK_ERROR`      | Provider desincronizado tras switch| `rebuildProvider()` recrea el BrowserProvider |
-| Chain incorrecta     | Wallet en otra red                 | Auto-switch con `wallet_switchEthereumChain`  |
-| Insufficient balance | Saldo insuficiente                 | Validar antes de enviar TX        |
-
----
-
-## Comprar Crypto (Fiat On-Ramp)
-
-### Proveedores Integrados
-
-Los tres proveedores usan **URLs públicas** (no requieren API key):
-
-1. **Binance** — `https://www.binance.com/en/crypto/buy/{binSlug}`
-   - Acepta tarjeta de crédito/débito, P2P, transferencia bancaria.
-   
-2. **Changelly** — `https://changelly.com/buy/{chgSlug}`
-   - Acepta Visa / Mastercard.
-
-3. **ChangeNOW** — `https://changenow.io/exchange?to={cnTo}`
-   - Permite intercambiar desde cualquier otra criptomoneda.
-
-### Actualización de Links
-
-Los links se actualizan dinámicamente en `updateProviderLinks()` después de que la wallet se reconecta, incorporando:
-- La dirección de la wallet como destino.
-- El monto en USD seleccionado.
-- El slug correcto según la red detectada.
-
----
-
-## Estructura de Archivos
-
-```
-TradingWeb/
-├── TradingWeb/
-│   ├── settings.py          # Configuración Django + Channels
-│   ├── urls.py              # Rutas HTTP (/, /dashboard/, /wallet/, etc.)
-│   └── asgi.py              # ASGI config (Daphne + Channels)
-│
-├── trading/
-│   ├── Controllers/
-│   │   └── viewController.py    # Renders de páginas HTML
-│   │
-│   ├── WebSocket/
-│   │   ├── routing.py           # Rutas WebSocket (ws/binance/, ws/wallet/)
-│   │   ├── binanceConsumer.py   # Consumer: datos de Binance en tiempo real
-│   │   └── walletConsumer.py    # Consumer: eventos de wallet
-│   │
-│   ├── templates/
-│   │   ├── base.html            # Template base (CSS + estructura)
-│   │   ├── login.html           # Página de login / conexión de wallet
-│   │   ├── dashboard.html       # Dashboard principal de trading
-│   │   ├── transactions.html    # Página de transacciones
-│   │   └── wallet.html          # Página de wallet completa
-│   │
-│   ├── static/
-│   │   ├── css/
-│   │   │   └── main.css         # Estilos globales (Binance dark theme)
-│   │   └── js/
-│   │       ├── walletConnect.js # Conexión Trust Wallet / MetaMask
-│   │       ├── dashboard.js     # Lógica del dashboard (chart, orderbook, trade)
-│   │       ├── transactions.js  # Lógica de transacciones (send, swap)
-│   │       └── pageWallet.js    # Lógica de la página wallet
-│   │
-│   ├── Services/                # Servicios backend
-│   ├── Models/                  # Modelos de datos
-│   └── Routes/
-│       └── urls.py              # Rutas API REST
-│
-└── docs/                        # ← Documentación (este archivo)
+```javascript
+// Refresh automático cada 60 segundos
+setInterval(() => {
+    refreshOrderBook();
+    refreshTradeHistory();
+    refreshBalance();
+}, 60000);
 ```
 
 ---
 
-## Diagrama de Flujo
+## 3. WebSocket Binance
 
+### `binanceConsumer.py` (148 líneas)
+
+Consumer Django Channels que conecta al frontend con los streams de Binance.
+
+```python
+class BinanceConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.pair = self.scope['url_route']['kwargs'].get('pair', 'btcusdt')
+        await self.accept()
+        # Conectar al stream de Binance
+        self.binance_ws = await websockets.connect(
+            f'wss://stream.binance.com:9443/ws/{self.pair}@kline_1m'
+        )
+        asyncio.create_task(self._relay_messages())
+
+    async def _relay_messages(self):
+        """Relay mensajes de Binance al frontend."""
+        async for message in self.binance_ws:
+            await self.send(text_data=message)
+
+    async def disconnect(self, code):
+        if hasattr(self, 'binance_ws'):
+            await self.binance_ws.close()
 ```
-                    ┌────────────┐
-                    │   Usuario   │
-                    └─────┬──────┘
-                          │
-                    ┌─────▼──────┐
-                    │  Login Page │
-                    │ Connect     │
-                    │ Wallet      │
-                    └─────┬──────┘
-                          │ eth_requestAccounts
-                          │ → address + chainId
-                    ┌─────▼──────────────────────────────────┐
-                    │           DASHBOARD                      │
-                    │                                          │
-                    │  ┌─────────────┐    ┌─────────────┐     │
-                    │  │  ws/binance/ │    │  ws/wallet/  │    │
-                    │  │  ▲           │    │  ▲           │    │
-                    │  │  │ klines    │    │  │ balance    │    │
-                    │  │  │ trades    │    │  │ tokens     │    │
-                    │  │  │ depth     │    │  │ events     │    │
-                    │  │  │ ticker    │    │  │            │    │
-                    │  └──┤           │    └──┤            │    │
-                    │     ▼           │       ▼            │    │
-                    │  ┌──────┐ ┌────┴┐  ┌───────────┐    │    │
-                    │  │Chart │ │Order│  │ Balance   │    │    │
-                    │  │      │ │Book │  │ Tokens    │    │    │
-                    │  └──────┘ └─────┘  └───────────┘    │    │
-                    │                                      │    │
-                    │  ┌────────────────────────┐          │    │
-                    │  │     BUY / SELL          │          │    │
-                    │  │ ethers.js → DEX Router  │          │    │
-                    │  │ PancakeSwap / Uniswap   │          │    │
-                    │  └────────────────────────┘          │    │
-                    └──────────────────────────────────────┘    │
-                                                                │
-                    ┌──────────────────────────────────────┐    │
-                    │           WALLET PAGE                  │    │
-                    │  Account │ Network │ Balances          │    │
-                    │  Buy Crypto │ Deposit │ Holdings       │    │
-                    └──────────────────────────────────────┘    │
-                                                                │
-                    ┌──────────────────────────────────────┐    │
-                    │         TRANSACTIONS PAGE              │    │
-                    │  Send Native │ Send Token │ Swap       │    │
-                    └──────────────────────────────────────┘
+
+### Streams disponibles
+
+| Stream | URL | Datos |
+|---|---|---|
+| Kline | `{pair}@kline_{interval}` | Velas OHLCV |
+| Ticker | `{pair}@ticker` | Precio 24h, cambio, volumen |
+| Depth | `{pair}@depth20` | Order book (20 niveles) |
+| Trade | `{pair}@trade` | Trades individuales |
+| Mini ticker | `{pair}@miniTicker` | Resumen compacto |
+
+---
+
+## 4. Wallet
+
+### Trust Wallet / MetaMask connection
+
+```javascript
+// walletConnect.js
+async function connectWallet() {
+    if (typeof window.ethereum === 'undefined') {
+        alert('Install Trust Wallet or MetaMask');
+        return;
+    }
+
+    const accounts = await window.ethereum.request({
+        method: 'eth_requestAccounts'
+    });
+
+    const address = accounts[0];
+    const chainId = await window.ethereum.request({
+        method: 'eth_chainId'
+    });
+
+    // Verificar chain (BSC = 0x38)
+    if (chainId !== '0x38') {
+        await switchToBSC();
+    }
+
+    // Generar JWT token
+    const response = await fetch('/api/wallet/connect/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, chainId })
+    });
+
+    const { token } = await response.json();
+    localStorage.setItem('jwt', token);
+}
+```
+
+### Funciones de wallet (`pageWallet.js` — 311 líneas)
+
+| Función | Descripción |
+|---|---|
+| `getBalance()` | Obtiene balance BNB/ETH del usuario |
+| `getTokenBalances()` | Lista tokens ERC-20 del usuario |
+| `sendTransaction()` | Envía BNB/ETH a otra dirección |
+| `approveToken()` | Aprueba un token para swap en DEX router |
+| `switchNetwork()` | Cambia entre BSC, Ethereum, etc. |
+
+### Sesión de wallet (`walletSessionModel.py`)
+
+```python
+class WalletSession(models.Model):
+    address     = models.CharField(max_length=42, unique=True)
+    chain_id    = models.IntegerField(default=56)
+    jwt_token   = models.TextField()
+    created_at  = models.DateTimeField(auto_now_add=True)
+    last_active = models.DateTimeField(auto_now=True)
+    is_active   = models.BooleanField(default=True)
 ```
 
 ---
 
-## Notas Técnicas
+## 5. DEX Swaps
 
-### Reconexión de Wallet
-- Al navegar entre páginas, la wallet se reconecta automáticamente usando `eth_accounts` (no re-solicita permisos).
-- El estado se guarda en `localStorage` y `window.__walletState`.
-- Si la chain no coincide con la esperada, se muestra un botón "Switch" que llama `wallet_switchEthereumChain`.
+### Ejecución de swap (frontend)
 
-### Rebuild Provider
-- Después de cambiar de red (`chainChanged`), ethers.js puede quedar desincronizado.
-- `rebuildProvider()` crea un nuevo `BrowserProvider` limpio para evitar `NETWORK_ERROR`.
+```javascript
+// Swap BNB → Token via PancakeSwap V2 Router
+async function executeSwap(tokenAddress, amountBNB, slippage) {
+    const router = new ethers.Contract(
+        '0x10ED43C718714eb63d5aA57B78B54917F0Da2', // PancakeSwap V2 Router
+        ROUTER_ABI,
+        signer
+    );
 
-### Servir Estáticos con Daphne
-- Daphne (ASGI) no sirve archivos estáticos por defecto.
-- Se usa `staticfiles_urlpatterns()` en `urls.py` cuando `DEBUG=True`.
+    const path = [WBNB_ADDRESS, tokenAddress];
+    const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
+    const amountIn = ethers.parseEther(amountBNB.toString());
 
-### Formato USD
-- La función `fmtUsd()` maneja correctamente el valor `0` (evita `"$NaN"`).
-- Usa `Intl.NumberFormat` para formato de moneda.
+    // Calcular amountOutMin con slippage
+    const amounts = await router.getAmountsOut(amountIn, path);
+    const amountOutMin = amounts[1] * BigInt(100 - slippage) / BigInt(100);
+
+    const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(
+        amountOutMin,
+        path,
+        userAddress,
+        deadline,
+        { value: amountIn, gasLimit: 300000 }
+    );
+
+    const receipt = await tx.wait();
+    return receipt;
+}
+```
+
+### Tipos de orden soportados
+
+| Tipo | Descripción | Implementación |
+|---|---|---|
+| **Market** | Comprar/vender al precio actual | Swap directo en PancakeSwap |
+| **Limit** | Orden a precio específico | Monitoreada en frontend, ejecuta cuando se alcanza |
+| **Stop-Limit** | Activar limit al llegar a un precio | Monitoreada con trigger price |
+
+---
+
+## 6. Transacciones
+
+### `transactions.js` (282 líneas)
+
+Página de historial de transacciones del usuario.
+
+| Feature | Descripción |
+|---|---|
+| Lista de txs | Todas las transacciones de la wallet |
+| Filtros | Por tipo (swap, transfer, approve), token, fecha |
+| Detalles | Hash, from, to, value, gas, status |
+| BSCScan link | Link directo a BSCScan para cada tx |
+| Paginación | 20 txs por página |
+
+### Fuente de datos
+
+```javascript
+// Obtener transacciones de BSCScan API
+async function fetchTransactions(address) {
+    const url = `https://api.bscscan.com/api?module=account&action=txlist&address=${address}&sort=desc`;
+    const response = await fetch(url);
+    const data = await response.json();
+    return data.result;
+}
+```
+
+---
+
+## 7. Autenticación Trust Wallet
+
+### Flujo de autenticación
+
+```
+1. Usuario abre /login/
+2. Clic en "Connect Wallet"
+3. Trust Wallet / MetaMask popup → usuario aprueba
+4. Frontend envía address + chainId al backend
+5. Backend genera JWT (PyJWT + passlib)
+6. JWT se guarda en localStorage
+7. Todas las requests incluyen JWT en header
+8. Backend verifica JWT en cada request
+```
+
+### JWT payload
+
+```python
+payload = {
+    'address': '0x1234...abcd',
+    'chain_id': 56,
+    'iat': datetime.utcnow(),
+    'exp': datetime.utcnow() + timedelta(hours=24),
+}
+token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+```
+
+### Middleware de verificación
+
+```python
+def verify_jwt(request):
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return None
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        return payload['address']
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+```
+
+---
+
+## 8. Frontend
+
+### Estructura de archivos
+
+```
+static/
+├── css/
+│   └── main.css          # 2,569 líneas — Binance dark theme completo
+└── js/
+    ├── dashboard.js      # 2,184 líneas — Dashboard de trading
+    ├── pageSniper.js     # 1,862 líneas — Sniper Bot frontend
+    ├── pageWallet.js     # 311 líneas — Wallet management
+    ├── transactions.js   # 282 líneas — Transaction history
+    └── walletConnect.js  # 185 líneas — Wallet connection
+
+templates/
+├── base.html             # Template base con navbar + footer
+├── dashboard.html        # 435 líneas — Trading panel
+├── sniper.html           # 519 líneas — Sniper Bot UI
+├── wallet.html           # 172 líneas — Wallet page
+├── transactions.html     # 123 líneas — Transaction history
+└── login.html            # 63 líneas — Login / Connect wallet
+```
+
+### Librerías frontend (CDN)
+
+| Librería | Versión | Uso |
+|---|---|---|
+| ethers.js | 6.x | Interacción con wallet y contratos |
+| Font Awesome | 6.x | Iconos |
+| Google Fonts | — | Fuente Inter |
+
+> **Nota:** Chart.js fue removido por optimización de rendimiento. Se usan mini-bars DOM nativos.
+
+---
+
+## 9. Estilos
+
+### `main.css` — 2,569 líneas
+
+Theme Binance dark con variables CSS personalizables.
+
+#### Variables principales
+
+```css
+:root {
+    /* Backgrounds */
+    --bg-primary:   #0b0e11;
+    --bg-secondary: #1e2329;
+    --bg-panel:     #181a20;
+    --bg-hover:     #2b3139;
+
+    /* Colores de trading */
+    --clr-up:    #0ecb81;   /* Verde — precio sube */
+    --clr-down:  #f6465d;   /* Rojo — precio baja */
+    --clr-accent: #fcd535;  /* Amarillo Binance */
+
+    /* Texto */
+    --text-primary:   #eaecef;
+    --text-secondary: #848e9c;
+    --text-muted:     #5e6776;
+
+    /* Bordes */
+    --border-color: #2b3139;
+    --border-radius: 4px;
+}
+```
+
+#### Secciones del CSS
+
+| Sección | Descripción |
+|---|---|
+| Base & Reset | Normalización, box-sizing, scrollbar custom |
+| Layout | Grid system, flex containers, responsive breakpoints |
+| Navbar | Barra superior con logo, navegación, wallet status |
+| Dashboard | Order book, trade history, price header, chart area |
+| Sniper Bot | Token table, feed cards, settings panel, status bar |
+| Wallet | Balance cards, token list, send form |
+| Forms | Inputs, buttons, selects, toggles, sliders |
+| Modals | Popups de confirmación, detalles de token |
+| Animations | Fade-in, slide, pulse, table row highlight |
+| Responsive | Media queries para mobile/tablet |
+
+---
+
+## 10. Endpoints API
+
+### Views (páginas HTML)
+
+| URL | View | Template |
+|---|---|---|
+| `/` | `login_view` | `login.html` |
+| `/login/` | `login_view` | `login.html` |
+| `/dashboard/` | `dashboard_view` | `dashboard.html` |
+| `/sniper/` | `sniper_view` | `sniper.html` |
+| `/wallet/` | `wallet_view` | `wallet.html` |
+| `/transactions/` | `transactions_view` | `transactions.html` |
+
+### API endpoints (wallet)
+
+| Método | URL | Descripción |
+|---|---|---|
+| `POST` | `/api/wallet/connect/` | Conectar wallet → JWT |
+| `GET` | `/api/wallet/balance/` | Obtener balance |
+| `POST` | `/api/wallet/disconnect/` | Desconectar sesión |
+| `GET` | `/api/wallet/session/` | Verificar sesión activa |
+
+### WebSocket endpoints
+
+| URL | Consumer | Descripción |
+|---|---|---|
+| `ws/sniper/` | `SniperConsumer` | Sniper Bot bidireccional |
+| `ws/binance/<pair>/` | `BinanceConsumer` | Stream datos Binance |
+| `ws/wallet/` | `WalletConsumer` | Eventos wallet |
+
+### Routing
+
+```python
+# TradingWeb/urls.py
+urlpatterns = [
+    path('', include('trading.Routes.urls')),
+]
+
+# trading/Routes/urls.py
+urlpatterns = [
+    path('', views.login_view),
+    path('login/', views.login_view),
+    path('dashboard/', views.dashboard_view),
+    path('sniper/', views.sniper_view),
+    path('wallet/', views.wallet_view),
+    path('transactions/', views.transactions_view),
+    path('api/wallet/', include('trading.Routes.walletRouter')),
+]
+
+# WebSocket/routing.py
+websocket_urlpatterns = [
+    re_path(r'ws/sniper/$', SniperConsumer.as_asgi()),
+    re_path(r'ws/binance/(?P<pair>\w+)/$', BinanceConsumer.as_asgi()),
+    re_path(r'ws/wallet/$', WalletConsumer.as_asgi()),
+]
+```
+
+---
+
+## Documentación relacionada
+
+- [README.md](../README.md) — Guía general del proyecto, instalación, configuración
+- [docs/SNIPER.md](SNIPER.md) — Documentación técnica del Sniper Bot (12 módulos, 18 capas)
+
+---
+
+*Última actualización: Junio 2025 — v4*

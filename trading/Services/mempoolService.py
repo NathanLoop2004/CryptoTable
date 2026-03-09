@@ -335,7 +335,16 @@ class MempoolListener:
 
         to_addr = str(tx_data.get("to", "") or "").lower()
         from_addr = str(tx_data.get("from", "") or "").lower()
-        input_data = str(tx_data.get("input", "") or "")
+
+        # Properly convert input data to hex string (HexBytes → "0x...")
+        raw_input = tx_data.get("input", "") or ""
+        if isinstance(raw_input, (bytes, bytearray)):
+            input_data = "0x" + raw_input.hex()
+        elif hasattr(raw_input, 'hex') and callable(raw_input.hex):
+            input_data = "0x" + raw_input.hex()
+        else:
+            input_data = str(raw_input)
+
         value = int(tx_data.get("value", 0))
 
         self.stats["total_pending_seen"] += 1
@@ -349,7 +358,7 @@ class MempoolListener:
             return
 
         selector = input_data[2:10].lower()
-        method_name = METHOD_SELECTORS.get(selector, f"unknown_{selector}")
+        method_name = METHOD_SELECTORS.get(selector, f"unknown_0x{selector}")
 
         event = MempoolEvent(
             tx_hash=tx_hash,
@@ -383,19 +392,7 @@ class MempoolListener:
 
         self.events_detected += 1
 
-        # Emit to UI
-        await self._emit("mempool_event", {
-            "tx_hash": event.tx_hash,
-            "method": event.method,
-            "from": event.from_address[:10] + "...",
-            "to": event.to_address[:10] + "...",
-            "value_native": round(event.value_native, 4),
-            "token": event.token_address,
-            "gas_gwei": round(event.gas_price_gwei, 1),
-            "total_detected": self.events_detected,
-        })
-
-        # Forward to sniper bot for processing
+        # Forward to sniper bot for processing (it emits to the UI)
         if self._event_callback:
             try:
                 await self._event_callback(event)

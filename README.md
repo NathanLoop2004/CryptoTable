@@ -1,6 +1,6 @@
 # TradingWeb — Plataforma de Trading + Sniper Bot
 
-Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 6 módulos profesionales** (pump scoring, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls.
+Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 12 módulos profesionales** (pump scoring 10 componentes, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking, dev reputation, unified risk engine, backend trade executor, resource monitoring, alerts multi-canal, performance metrics), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls con **18 capas de seguridad**.
 
 ---
 
@@ -46,31 +46,60 @@ Esto instalará:
 
 | Paquete | Para qué sirve |
 |---|---|
-| `Django` | Framework web principal |
-| `channels` + `daphne` | WebSocket (ASGI) en tiempo real |
-| `web3` | Interacción con blockchain (BSC/ETH) |
-| `aiohttp` | Llamadas async a APIs externas (GoPlus, honeypot.is, DexScreener, etc.) |
-| `django-cors-headers` | Permitir peticiones cross-origin |
-| `python-dotenv` | Variables de entorno desde `.env` |
-| `PyJWT` + `passlib` | Autenticación Trust Wallet |
-| `requests` | Peticiones HTTP síncronas |
-| `websockets` | Conexión WebSocket a Binance + Sync listener |
-| `psycopg2-binary` | PostgreSQL (opcional, usa SQLite por defecto) |
-| `pycryptodome` | Criptografía para firmas de wallet |
+| `Django 6.0.2` | Framework web principal |
+| `channels 4.3.2` + `daphne 4.2.1` | WebSocket (ASGI) en tiempo real |
+| `web3 7.14.1` | Interacción con blockchain (BSC/ETH) |
+| `aiohttp 3.13.3` | Llamadas async a APIs externas (GoPlus, Honeypot.is, DexScreener, etc.) |
+| `django-cors-headers 4.9.0` | Permitir peticiones cross-origin |
+| `python-dotenv 1.2.1` | Variables de entorno desde `.env` |
+| `PyJWT 2.11.0` + `passlib 1.7.4` | Autenticación Trust Wallet |
+| `requests 2.32.5` | Peticiones HTTP síncronas |
+| `websockets 15.0.1` | Conexión WebSocket a Binance + Sync listener |
+| `psycopg2-binary 2.9.11` | PostgreSQL (opcional, usa SQLite por defecto) |
+| `pycryptodome 3.23.0` | Criptografía para firmas de wallet |
 
-### 4. Aplicar migraciones
+### 4. Configurar variables de entorno
+
+Crea un archivo `.env` en la raíz del proyecto (opcional, para alertas):
+
+```bash
+# Telegram
+SNIPER_TELEGRAM_TOKEN=bot123456:ABCDEF...
+SNIPER_TELEGRAM_CHAT_ID=@mi_canal
+
+# Discord
+SNIPER_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+
+# Email (Gmail SMTP)
+SNIPER_EMAIL_FROM=sniper@gmail.com
+SNIPER_EMAIL_TO=alertas@gmail.com
+SNIPER_EMAIL_PASSWORD=app_password
+
+# Backend Trade Executor (opcional, avanzado)
+SNIPER_PRIVATE_KEY=0x...
+```
+
+### 5. Aplicar migraciones
 
 ```bash
 python manage.py migrate
 ```
 
-### 5. Verificar que todo está bien
+### 6. Verificar que todo está bien
 
 ```bash
 python manage.py check
 ```
 
 Debería mostrar: `System check identified no issues.`
+
+### 7. Ejecutar tests
+
+```bash
+python manage.py test trading.tests -v 2
+```
+
+130 tests automatizados cubriendo todos los módulos.
 
 ---
 
@@ -111,135 +140,110 @@ http://127.0.0.1:8000/
 
 | URL | Descripción |
 |---|---|
-| `/` o `/dashboard/` | Panel principal de trading (gráficas, orderbook, trades) |
+| `/` o `/login/` | Login — Conectar Trust Wallet / MetaMask |
+| `/dashboard/` | Panel principal de trading (gráficas, orderbook, trades) |
 | `/sniper/` | Sniper Bot — detección y auto-trading de tokens nuevos |
 | `/transactions/` | Historial de transacciones |
-| `/wallet/` | Gestión de wallet |
-| `/login/` | Login con Trust Wallet |
+| `/wallet/` | Gestión de wallet (balances, envíos, compra crypto) |
 
 ---
 
-## 🎯 Sniper Bot — Cómo funciona
+## 🎯 Sniper Bot — Resumen
 
-### Pipeline completo
+### Pipeline completo (v4)
 
-1. **Start** → El bot escanea bloques nuevos en BSC (o ETH) cada ~1.5s
-2. **Detecta** → Busca eventos `PairCreated` en PancakeSwap/Uniswap
-3. **Verifica liquidez** → `pair.getReserves()` → mínimo $5,000 USD
-4. **Analiza** → Para CADA token detectado, consulta **5 APIs de seguridad**:
-   - **GoPlus Security** — 18+ flags de seguridad + LP lock + holder concentration
-   - **Honeypot.is** — Detecta honeypots, buy/sell tax
-   - **DexScreener** — Volumen, liquidez, edad, precio histórico (m5, h1, h6, h24)
-   - **CoinGecko** — Verificación de listing legítimo
-   - **TokenSniffer** — Score de scam (0-100), detección de estafa
-5. **Clasifica riesgo** → SAFE 🟢 / WARNING 🟡 / DANGER 🔴
-6. **Verifica contrato** → Código verificado, no-proxy, no-hidden owner, holder concentration
-7. **Smart Entry Gate** → Rechaza tokens ya bombeados (+30% en 5m, +50% en 1h)
-8. **LP Lock Gate** → Requiere LP bloqueado ≥80% por ≥24h
-9. **Auto-Buy** → Ejecuta swap via ethers.js desde el navegador
-10. **P&L Monitoring** → Actualiza cada ~3s con TP/SL automático
-11. **Auto-Sell** → Vende automáticamente al alcanzar TP, SL, o límite de tiempo
+```
+Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5 APIs)
+→ Pump Analyzer (10 comp) → Swap Simulator → Bytecode → Smart Money
+→ Dev Tracker → Risk Engine → Buy Gating (18 capas) → snipe_opportunity
+→ Auto-Buy (ethers.js) → P&L Monitor → Rug Detector → Auto-Sell (TP/SL/Time)
+→ Resource Monitor → Alert Service → Metrics Dashboard
+```
 
-### Módulos Profesionales v2
+### 12 Módulos Profesionales
 
-| Módulo | Archivo | Descripción |
-|---|---|---|
-| 🚀 Pump Analyzer | `pumpAnalyzer.py` | Scoring 0-100 con 7 componentes (liquidez, holders, actividad, ballenas, momentum, edad, social) |
-| 🧪 Swap Simulator | `swapSimulator.py` | Simulación on-chain de buy+sell vía eth_call + análisis de bytecode |
-| 📡 Mempool Service | `mempoolService.py` | Escucha txs pendientes para detección 10-30s antes de confirmación |
-| 🛡️ Rug Detector | `rugDetector.py` | Monitoreo post-compra: LP drain, tax increase, dev selling |
-| 🔍 Pre-Launch | `preLaunchDetector.py` | Detecta tokens antes de listing (contract creation + router approval) |
-| 🐋 Smart Money | `smartMoneyTracker.py` | Trackea wallets rentables y emite señales cuando compran |
+| Módulo | Archivo | Líneas | Versión | Descripción |
+|---|---|---|---|---|
+| 🚀 Pump Analyzer | `pumpAnalyzer.py` | 597 | v3 | Scoring 0-100 con **10** componentes ponderados |
+| 🧪 Swap Simulator | `swapSimulator.py` | 485 | v2 | Simulación on-chain buy+sell vía `eth_call` + bytecode |
+| 📡 Mempool Service | `mempoolService.py` | 394 | v2 | Escucha txs pendientes 10-30s antes de confirmación |
+| 🛡️ Rug Detector | `rugDetector.py` | 417 | v2 | Monitoreo post-compra: LP drain, tax increase, dev sell |
+| 🔍 Pre-Launch | `preLaunchDetector.py` | 358 | v2 | Detecta tokens antes de listing (contract + router) |
+| 🐋 Smart Money | `smartMoneyTracker.py` | 339 | v2 | Trackea wallets rentables y señales de compra |
+| 👨‍💻 Dev Tracker | `devTracker.py` | 435 | v3 | Reputación del deployer (historial de éxitos/rugs) |
+| 🎯 Risk Engine | `riskEngine.py` | 444 | v3 | Motor unificado de decisión (7 componentes → 0-100) |
+| ⚡ Trade Executor | `tradeExecutor.py` | 611 | v3 | Ejecución backend con private key + multi-RPC |
+| 📊 Resource Monitor | `resourceMonitor.py` | 211 | v4 | CPU/RAM/WS/RPC metrics en tiempo real |
+| 🔔 Alert Service | `alertService.py` | 404 | v4 | Alertas Telegram + Discord + Email + rate limiting |
+| 📈 Metrics Service | `metricsService.py` | 329 | v4 | P&L tracking, win rate, detection speed, hourly series |
+
+**Motor principal:** `sniperService.py` — **2,738 líneas** (ContractAnalyzer + SniperBot + main loop + enrichment)
 
 ### 5 APIs de seguridad
 
 | API | Qué detecta |
 |---|---|
-| � **GoPlus** | Honeypot, mintable, blacklist, proxy, hidden owner, LP lock, holder concentration, fake renounce |
+| 🛡️ **GoPlus** | 18+ flags de seguridad, LP lock, holder concentration, fake renounce |
 | 🍯 **Honeypot.is** | Simulación real de buy/sell, tax exacto, honeypot |
-| 📊 **DexScreener** | Volumen 24h, liquidez, buys/sells, edad del par, cambio de precio (m5/h1/h6/h24) |
-| 🦎 **CoinGecko** | Verificación de listing, links sociales, website |
+| 📊 **DexScreener** | Volumen, liquidez, edad, precio histórico (m5/h1/h6/h24) |
+| 🦎 **CoinGecko** | Verificación de listing legítimo, social links |
 | 🔍 **TokenSniffer** | Score de scam 0-100, detección de patrones fraudulentos |
 
-### Enrichment dual (retry inteligente)
+### Pump Analyzer v3 — 10 componentes
 
-- **Fast cycle (~3s):** Re-intenta SOLO las APIs que fallaron (GoPlus, Honeypot, CoinGecko, TokenSniffer)
-- **Slow cycle (~15s):** Refresca TODOS los tokens con DexScreener completo (tarda en indexar tokens nuevos)
+| Componente | Peso | Descripción |
+|---|---|---|
+| liquidity | 14 | Sweet spot $8k–$120k |
+| holder | 10 | Distribución saludable de holders |
+| activity | 15 | Ratio buy/sell, volumen 24h |
+| whale | 10 | Acumulación de ballenas |
+| momentum | 12 | Patrón de precio gradual |
+| age | 7 | Tokens frescos (1-24h ideal) |
+| social | 4 | Web, CoinGecko, redes sociales |
+| mcap | 12 | Market cap sweet spot ($20k-$400k) |
+| holder_growth | 10 | Crecimiento de holders/minuto |
+| lp_growth | 6 | Cambio en liquidez vs. inicial |
 
-### Flags de seguridad que detecta
+**Grades:** HIGH (80-100) / MEDIUM (60-79) / LOW (40-59) / AVOID (0-39)
 
-| Flag | Significado |
-|---|---|
-| 🍯 Honeypot | No puedes vender |
-| 🖨️ Mintable | El dueño puede crear más tokens |
-| 🚫 Blacklist | Puede bloquear wallets |
-| ⏸️ Pausable | Puede pausar el trading |
-| 🔐 Can't sell all | No puedes vender todos tus tokens |
-| ⚠️ Ctrl balance | El dueño puede modificar balances |
-| 💣 Self-destruct | El contrato puede autodestruirse |
-| 🔄 Proxy | Puede cambiar la lógica del contrato |
-| 👤 Hidden owner | Owner oculto |
-| 👑 Has owner | Contrato tiene dueño con privilegios |
-| 🔒 Not verified | Código fuente no publicado |
-| � LP Lock | Liquidez bloqueada (PinkLock, Unicrypt, Team.Finance) |
-| 🚨 Fake renounce | Owner puede reclamar ownership después de renunciar |
-| 🚨 Airdrop scam | Token de estafa de airdrop |
-| 🚨 Fake ERC-20 | Interface falsa, no es token real |
-| 🐋 Top holder >30% | 1 wallet controla >30% del supply |
-| 👨‍💻 Creator >20% | El deployer retiene >20% del supply |
+Cada componente tiene try/except individual con fallback neutral (40) — un componente que falla NO rompe el score total.
 
-### Verificación del contrato (hardened)
+### 18 capas de seguridad anti rug-pull
 
-El bot requiere que el contrato pase verificaciones estrictas antes de comprar:
+```
+ 1. 5 APIs de seguridad → detecta 18+ flags peligrosos
+ 2. Código verificado obligatorio → no compra contratos ocultos
+ 3. Anti-proxy → bloquea contratos upgradeable
+ 4. Anti-hidden-owner → bloquea control invisible
+ 5. Anti-fake-renounce → detecta can_take_back_ownership
+ 6. Holder concentration → top holder < 30%, creator < 20%
+ 7. LP Lock ≥80% obligatorio → owner no controla liquidez
+ 8. LP Lock ≥24h obligatorio → lock no expira pronto
+ 9. Smart Entry → no compra tokens ya bombeados (+30% 5m, +50% 1h)
+10. Price dump check → no compra tokens en caída (-50% 24h, -40% 6h, -25% 1h)
+11. Stop Loss 20% automático
+12. Max Hold Hours → vende 1h antes de que expire el lock
+13. Sync WS Listener → detecta cambios de precio en real-time
+14. Pump Score 0-100 → rechaza tokens con grade AVOID (<40)
+15. Swap Simulation → verifica on-chain buy+sell con eth_call
+16. Bytecode Analysis → detecta SELFDESTRUCT / DELEGATECALL
+17. Rug Detector → monitoreo post-compra (LP drain, dev sell)
+18. Risk Engine → score unificado 0-100 con hard stops
+```
 
-| Condición | Resultado |
-|---|---|
-| Código no verificado (no open source) | ❌ **Rechazado** — código oculto = trap |
-| Contrato proxy | ❌ **Rechazado** — puede cambiar toda la lógica |
-| Owner oculto | ❌ **Rechazado** — control invisible |
-| Puede reclamar ownership | ❌ **Rechazado** — finge renunciar |
-| Token de airdrop scam | ❌ **Rechazado** |
-| Token falso (no ERC-20) | ❌ **Rechazado** |
-| Top holder ≥ 30% supply | ❌ **Rechazado** — riesgo de dump |
-| Creator retiene ≥ 20% supply | ❌ **Rechazado** — riesgo de dump |
+### Enrichment inteligente (anti-spam)
 
-### Validación de LP Lock (anti rug-pull)
+- **Fast cycle (~3s):** Re-intenta SOLO APIs fallidas para tokens < 5 min de edad
+- **Slow cycle (~15s):** Refresca DexScreener para tokens < 10 min de edad
+- **Change detection:** Solo emite `token_updated` si liquidez, riesgo o APIs cambiaron
+- **Dedup frontend:** `token_detected` actualiza card existente en lugar de duplicar
 
-El bot verifica el bloqueo de liquidez antes de comprar:
+### RPC resiliente
 
-| Condición | Resultado |
-|---|---|
-| LP no bloqueada | ❌ **Rechazado** — riesgo de rug pull |
-| LP bloqueada < 80% | ❌ **Rechazado** — owner controla la mayoría |
-| LP lock < 24h restantes | ❌ **Rechazado** — lock demasiado corto |
-| LP lock expirado | ❌ **Rechazado** + alerta "Lock EXPIRADO" |
-| LP bloqueada ≥ 80%, ≥ 24h | ✅ **Aprobado** |
-
-Fuentes de lock detectadas: **PinkLock**, **Unicrypt**, **Team.Finance**.
-
-### Smart Entry Gate (protección anti-pump)
-
-El bot rechaza tokens que ya subieron demasiado antes de comprar:
-
-| Condición | Resultado |
-|---|---|
-| Precio 5min ≥ +30% | ❌ **Rechazado** — ya bombeado |
-| Precio 1h ≥ +50% | ❌ **Rechazado** — ya bombeado |
-| Precio 24h ≤ -50% | ❌ **Rechazado** — dump masivo |
-| Precio 6h ≤ -40% | ❌ **Rechazado** — dump reciente |
-| Precio 1h ≤ -25% | ❌ **Rechazado** — caída activa |
-
-### Auto-Buy & Auto-Sell
-
-- **Auto-Buy**: El bot compra automáticamente tokens que pasan TODOS los filtros de seguridad
-- **Auto-Sell por TP**: Vende cuando la ganancia alcanza el Take Profit (default 40%)
-- **Auto-Sell por SL**: Vende cuando la pérdida alcanza el Stop Loss (default 20%)
-- **Auto-Sell por tiempo**: Vende cuando se cumple el tiempo máximo de hold (basado en LP lock)
-- **P&L Update**: Precio actualizado cada ~3s para reacción rápida
-
-### WebSocket Sync Listener
-
-El bot mantiene un listener WebSocket en tiempo real para eventos `Sync` de los pares LP rastreados. Esto permite detectar cambios de precio sin polling adicional.
+- **10 RPCs BSC** + **5 RPCs ETH** con rotación automática
+- **Retry hasta 3 intentos** por operación con rotación entre RPCs
+- **Backoff exponencial** para rate limits (429): base 2s, max 30s, decay 0.8
+- **Guard native_price:** Si BNB/ETH price es 0, re-fetch Binance antes de calcular USD
 
 ---
 
@@ -247,47 +251,88 @@ El bot mantiene un listener WebSocket en tiempo real para eventos `Sync` de los 
 
 ```
 TradingWeb/
-├── manage.py                    # Django CLI
-├── requirements.txt             # Dependencias pip
-├── db.sqlite3                   # Base de datos SQLite
-├── README.md                    # Este archivo
+├── manage.py                       # Django CLI
+├── requirements.txt                # 13 dependencias pip
+├── .env                            # Variables de entorno (alertas, keys)
+├── .gitignore                      # Ignora .env, db, cache, logs
+├── db.sqlite3                      # Base de datos SQLite
+├── README.md                       # Este archivo
 │
-├── TradingWeb/                  # Configuración Django
-│   ├── settings.py              # Settings (DB, apps, channels, CORS)
-│   ├── urls.py                  # URL routing principal
-│   ├── asgi.py                  # ASGI config (Channels + WebSocket)
-│   └── wsgi.py                  # WSGI fallback
+├── TradingWeb/                     # Configuración Django
+│   ├── settings.py                 # Settings (DB, apps, channels, CORS)
+│   ├── urls.py                     # URL routing principal
+│   ├── asgi.py                     # ASGI config (Channels + WebSocket)
+│   └── wsgi.py                     # WSGI fallback
 │
-├── trading/                     # App principal
-│   ├── Controllers/             # Vistas / controladores
-│   ├── Models/                  # Modelos de datos
-│   ├── Routes/                  # URL patterns de la app
-│   ├── Services/                # Lógica de negocio
-│   │   ├── sniperService.py     # 🎯 Motor del Sniper Bot (~2300 líneas)
-│   │   ├── pumpAnalyzer.py      # 🚀 Pump scoring engine
-│   │   ├── swapSimulator.py     # 🧪 Swap simulation + bytecode analysis
-│   │   ├── mempoolService.py    # 📡 Mempool listener
-│   │   ├── rugDetector.py       # 🛡️ Post-buy rug detection
-│   │   ├── preLaunchDetector.py # 🔍 Pre-launch token detection
-│   │   └── smartMoneyTracker.py # 🐋 Smart money tracking
-│   ├── WebSocket/               # WebSocket consumers
-│   │   └── sniperConsumer.py    # Bridge Sniper ↔ Frontend (~161 líneas)
+├── trading/                        # App principal
+│   ├── Controllers/
+│   │   ├── viewController.py       # Renders de páginas HTML
+│   │   └── walletController.py     # API wallet endpoints
+│   │
+│   ├── Models/
+│   │   └── walletSessionModel.py   # Modelo de sesión de wallet
+│   │
+│   ├── Routes/
+│   │   ├── urls.py                 # URL patterns de la app
+│   │   └── walletRouter.py         # Rutas API wallet
+│   │
+│   ├── Services/                   # 12 módulos profesionales + core
+│   │   ├── sniperService.py        # 🎯 Motor del Sniper Bot (2,738 líneas)
+│   │   ├── pumpAnalyzer.py         # 🚀 Pump scoring engine v3 (597 líneas)
+│   │   ├── swapSimulator.py        # 🧪 Swap simulation + bytecode (485 líneas)
+│   │   ├── mempoolService.py       # 📡 Mempool listener (394 líneas)
+│   │   ├── rugDetector.py          # 🛡️ Post-buy rug detection (417 líneas)
+│   │   ├── preLaunchDetector.py    # 🔍 Pre-launch detection (358 líneas)
+│   │   ├── smartMoneyTracker.py    # 🐋 Smart money tracking (339 líneas)
+│   │   ├── devTracker.py           # 👨‍💻 Dev reputation v3 (435 líneas)
+│   │   ├── riskEngine.py           # 🎯 Risk engine v3 (444 líneas)
+│   │   ├── tradeExecutor.py        # ⚡ Trade executor v3 (611 líneas)
+│   │   ├── resourceMonitor.py      # 📊 Resource monitor v4 (211 líneas)
+│   │   ├── alertService.py         # 🔔 Alert service v4 (404 líneas)
+│   │   ├── metricsService.py       # 📈 Metrics service v4 (329 líneas)
+│   │   └── walletService.py        # Wallet logic (139 líneas)
+│   │
+│   ├── WebSocket/
+│   │   ├── routing.py              # Rutas WebSocket
+│   │   ├── sniperConsumer.py       # Bridge Sniper ↔ Frontend (146 líneas)
+│   │   ├── binanceConsumer.py      # Consumer datos Binance (148 líneas)
+│   │   └── walletConsumer.py       # Consumer eventos wallet (140 líneas)
+│   │
 │   ├── static/
-│   │   ├── css/main.css         # Estilos (tema Binance dark)
+│   │   ├── css/main.css            # Estilos Binance dark (2,569 líneas)
 │   │   └── js/
-│   │       ├── pageSniper.js    # Lógica frontend del Sniper (~1627 líneas)
-│   │       ├── walletConnect.js # Trust Wallet connection
-│   │       └── ...
-│   └── templates/
-│       ├── base.html            # Template base
-│       ├── sniper.html          # Sniper Bot UI (~384 líneas)
-│       ├── dashboard.html       # Trading panel
-│       └── ...
+│   │       ├── pageSniper.js       # Lógica frontend Sniper (1,862 líneas)
+│   │       ├── dashboard.js        # Lógica dashboard trading (2,184 líneas)
+│   │       ├── pageWallet.js       # Lógica página wallet (311 líneas)
+│   │       ├── transactions.js     # Lógica transacciones (282 líneas)
+│   │       └── walletConnect.js    # Trust Wallet connection (185 líneas)
+│   │
+│   ├── templates/
+│   │   ├── base.html               # Template base
+│   │   ├── sniper.html             # Sniper Bot UI (519 líneas)
+│   │   ├── dashboard.html          # Trading panel (435 líneas)
+│   │   ├── wallet.html             # Página wallet (172 líneas)
+│   │   ├── transactions.html       # Transacciones (123 líneas)
+│   │   └── login.html              # Login Trust Wallet (63 líneas)
+│   │
+│   └── tests/                      # 130 tests automatizados
+│       ├── test_sniperService.py   # 36 tests — bot init, settings, state
+│       ├── test_alertService.py    # 27 tests — events, rate limiting, send
+│       ├── test_riskEngine.py      # 14 tests — weights, hard stops, scoring
+│       ├── test_devTracker.py      # 16 tests — reputation, serial scammer
+│       ├── test_pumpAnalyzer.py    # 15 tests — 10 components, stats
+│       ├── test_resourceMonitor.py # 16 tests — CPU, WS, RPC tracking
+│       └── test_rugDetector.py     # 6 tests — alert levels, triggers
 │
-└── docs/
-    ├── TRADE.md                 # Documentación del módulo de trading
-    └── SNIPER.md                # Documentación detallada del sniper bot
+├── docs/
+│   ├── SNIPER.md                   # Documentación técnica del Sniper Bot
+│   └── TRADE.md                    # Documentación del módulo de Trading
+│
+└── logs/                           # Logs de alertas (auto-rotados, 5MB max)
+    └── sniper_alerts.log
 ```
+
+**Totales:** ~17,000 líneas de código fuente (backend + frontend + tests + styles + templates)
 
 ---
 
@@ -295,12 +340,12 @@ TradingWeb/
 
 ### RPCs de blockchain
 
-El bot usa estos RPCs públicos (sin API key) con rotación automática en caso de fallo:
+El bot usa RPCs públicos (sin API key) con rotación automática y backoff exponencial:
 
-| Chain | RPC principal | Fallbacks |
+| Chain | RPCs | Principales |
 |---|---|---|
-| BSC (56) | `bsc-rpc.publicnode.com` | `bsc.drpc.org`, `binance.llamarpc.com`, `bsc-pokt.nodies.app`, `bsc.meowrpc.com` |
-| Ethereum (1) | `eth.llamarpc.com` | `eth.drpc.org`, `ethereum-rpc.publicnode.com`, `eth.meowrpc.com` |
+| BSC (56) | **10 endpoints** | `publicnode`, `llamarpc`, `nodies`, `meowrpc`, `drpc`, 5× `binance.org` |
+| Ethereum (1) | **5 endpoints** | `publicnode`, `llamarpc`, `drpc`, `meowrpc`, `ankr` |
 
 ### Settings del Sniper (desde la UI)
 
@@ -313,12 +358,35 @@ El bot usa estos RPCs públicos (sin API key) con rotación automática en caso 
 | Take Profit | 40% | % de ganancia para auto-sell |
 | Stop Loss | 20% | % de pérdida para auto-sell |
 | Slippage | 12% | Slippage permitido en trades |
-| Only Safe | ✅ | Solo comprar tokens clasificados como SAFE |
-| Auto-Buy | ❌ | Ejecutar compras automáticamente (desactivado por seguridad) |
-| Max Hold Hours | Auto | Basado en LP lock duration (o disabled) |
+| Only Safe | ✅ | Solo comprar tokens SAFE |
+| Auto-Buy | ❌ | Ejecutar compras automáticamente (off por seguridad) |
+| Min Pump Score | 40 | Mínimo pump score para comprar |
 | Max Concurrent | 5 | Análisis paralelos de tokens |
 | Block Range | 5 | Bloques por ciclo de escaneo |
 | Poll Interval | 1.5s | Segundos entre escaneos |
+
+### Settings de módulos
+
+| Setting | Default | Descripción |
+|---|---|---|
+| `enable_pump_score` | ✅ | Pump scoring 0-100 (10 componentes) |
+| `enable_swap_sim` | ✅ | Swap simulation vía eth_call |
+| `enable_bytecode` | ✅ | Bytecode opcode analysis |
+| `enable_rug_detector` | ✅ | Post-buy rug monitoring |
+| `enable_dev_tracker` | ✅ | Developer reputation tracking |
+| `enable_risk_engine` | ✅ | Unified risk scoring |
+| `enable_mempool` | ❌ | Mempool listener (requiere WSS) |
+| `enable_prelaunch` | ❌ | Pre-launch detection (experimental) |
+| `enable_smart_money` | ❌ | Smart money tracking (experimental) |
+| `enable_trade_executor` | ❌ | Backend execution (requiere private key) |
+
+### User Profiles (1-click)
+
+| Perfil | Min Liquidez | Only Safe | Auto Buy | Risk |
+|---|---|---|---|---|
+| **Novato** | $10,000 | ✅ | ❌ | Conservador |
+| **Intermedio** | $5,000 | ✅ | ❌ | Balanced |
+| **Avanzado** | $2,000 | ❌ | ✅ | Agresivo |
 
 ---
 
@@ -327,7 +395,7 @@ El bot usa estos RPCs públicos (sin API key) con rotación automática en caso 
 ### El puerto 8000 está ocupado
 
 ```powershell
-# Windows PowerShell
+# Windows
 Get-NetTCPConnection -LocalPort 8000 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
 ```
 
@@ -338,25 +406,28 @@ lsof -ti:8000 | xargs kill -9
 
 ### Error `NativeCommandError` en PowerShell
 
-Daphne escribe logs en stderr, PowerShell los interpreta como error. Usa `Start-Process -WindowStyle Hidden` (Opción B) para evitarlo.
+Daphne escribe logs en stderr, PowerShell los interpreta como error. Usa `Start-Process -WindowStyle Hidden` para evitarlo.
 
 ### Error `hex string without 0x prefix`
 
-Verificar que `PAIR_CREATED_TOPIC` en `sniperService.py` incluye el prefijo `0x`:
-```python
-PAIR_CREATED_TOPIC = "0x" + Web3.keccak(text="PairCreated(...)").hex()
-```
+Verificar que `PAIR_CREATED_TOPIC` en `sniperService.py` incluye el prefijo `0x`.
 
 ### Error `limit exceeded` en RPC
 
-Los RPCs `bsc-dataseed*.binance.org` no soportan `eth_getLogs`. El bot rota automáticamente entre fallbacks.
+Los RPCs `bsc-dataseed*.binance.org` no soportan `eth_getLogs`. El bot rota automáticamente entre los 10 fallbacks con backoff exponencial.
+
+### Token detectado con datos en 0
+
+- Tokens nuevos tardan ~30s-2min en ser indexados por DexScreener/CoinGecko
+- El enrichment dual reintenta automáticamente cada 3-15s
+- Liquidez 0 en tokens sin liquidez real es comportamiento esperado
 
 ---
 
 ## 📚 Documentación adicional
 
-- [docs/TRADE.md](docs/TRADE.md) — Documentación del módulo de trading
-- [docs/SNIPER.md](docs/SNIPER.md) — Documentación detallada del sniper bot
+- [docs/SNIPER.md](docs/SNIPER.md) — Documentación técnica completa del Sniper Bot (módulos v2+v3+v4)
+- [docs/TRADE.md](docs/TRADE.md) — Documentación del módulo de Trading (dashboard, wallet, DEX swaps)
 
 ---
 
@@ -364,6 +435,7 @@ Los RPCs `bsc-dataseed*.binance.org` no soportan `eth_getLogs`. El bot rota auto
 
 - Este proyecto es **educativo**. El trading de criptomonedas conlleva riesgo de pérdida.
 - **Auto-Buy** está desactivado por defecto. Actívalo bajo tu propia responsabilidad.
-- Los RPCs públicos pueden tener límites de velocidad. Para uso intensivo, considera un nodo propio o un servicio como Alchemy/QuickNode.
-- La clasificación de "SAFE" no garantiza que un token sea seguro al 100%.
+- Los RPCs públicos pueden tener límites de velocidad. Para uso intensivo, considera un nodo propio o Alchemy/QuickNode.
+- La clasificación "SAFE" no garantiza que un token sea seguro al 100%.
 - La verificación de LP lock reduce pero no elimina el riesgo de rug pull.
+- El **Trade Executor** (backend) requiere una private key — úsalo solo si entiendes los riesgos.

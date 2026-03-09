@@ -758,15 +758,33 @@
             case "token_detected":
                 {
                     console.log("[TOKEN_DETECTED]", JSON.stringify(data, null, 2));
-                    // Full log card with ALL token data
                     const cardType = data.risk === "danger" ? "error" : data.risk === "safe" ? "good" : "warn";
-                    addFeedHTML(buildTokenLogCard(data), cardType);
 
-                    // Add to full detected list & table
+                    // If a feed card for this token already exists, update it in-place
+                    const existingCard = feedDiv.querySelector(`.token-log-card[data-token="${data.token}"]`);
+                    if (existingCard) {
+                        const tmp = document.createElement('div');
+                        tmp.innerHTML = buildTokenLogCard(data);
+                        const newCard = tmp.firstElementChild;
+                        // Replace the card inside its feed-line wrapper
+                        const feedLine = existingCard.closest('.feed-line');
+                        if (feedLine) {
+                            feedLine.className = `feed-line feed-${cardType}`;
+                            const ts = feedLine.textContent.match(/^\[.*?\]/);
+                            feedLine.innerHTML = `${ts ? ts[0] + ' ' : ''}${newCard.outerHTML}`;
+                        } else {
+                            existingCard.replaceWith(newCard);
+                        }
+                    } else {
+                        // First time seeing this token — add new card
+                        addFeedHTML(buildTokenLogCard(data), cardType);
+                        pipeStats.analyzed++;
+                        pipeAnalyzeCnt.textContent = pipeStats.analyzed;
+                        flashPipe("pipe-analyze");
+                    }
+
+                    // Upsert in detected list & table
                     addAllDetected(data);
-                    pipeStats.analyzed++;
-                    pipeAnalyzeCnt.textContent = pipeStats.analyzed;
-                    flashPipe("pipe-analyze");
 
                     // Auto-update log modal if open
                     _refreshLogModal(data);
@@ -897,7 +915,11 @@
 
             /* ── Professional v2 events ─────────────────── */
             case "mempool_event":
-                addFeed(`📡 Mempool: ${data.method} — token ${shortAddr(data.token)} — ${data.value_bnb ? data.value_bnb + ' BNB' : ''} (tx: ${shortAddr(data.tx_hash)})`, "detect");
+                {
+                    const tkn = data.token ? shortAddr(data.token) : "pending";
+                    const bnb = data.value_bnb ? ` — ${data.value_bnb} BNB` : "";
+                    addFeed(`📡 Mempool: ${data.method} — token ${tkn}${bnb} (tx: ${shortAddr(data.tx_hash)})`, "detect");
+                }
                 break;
 
             case "rug_alert":
@@ -1136,7 +1158,14 @@
 
     // ─── ALL Detected tokens (liquid + no-liquid) ──────
     function addAllDetected(data) {
-        allDetected.push(data);
+        // Upsert: if token already exists, update in place instead of duplicating
+        const existIdx = allDetected.findIndex(d => d.token === data.token);
+        if (existIdx !== -1) {
+            data.block = data.block || allDetected[existIdx].block;
+            allDetected[existIdx] = data;
+        } else {
+            allDetected.push(data);
+        }
         // Keep max 100
         if (allDetected.length > 100) allDetected = allDetected.slice(-80);
         renderDetectedTable();
