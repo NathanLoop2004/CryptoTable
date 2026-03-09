@@ -174,6 +174,8 @@
     const kpiFilterRate   = $("kpi-filter-rate");
     const kpiAvgSpeed     = $("kpi-avg-speed");
     const btnRefreshDash  = $("btn-refresh-dashboard");
+    const btnToggleDash   = $("btn-toggle-dashboard");
+    const dashboardBody   = $("dashboard-body");
 
     // v4: Effectiveness refs
     const effSafe         = $("eff-safe-pct");
@@ -220,10 +222,9 @@
         sniped: 0,
     };
 
-    // v4: Dashboard chart instances
-    let chartPnl        = null;
-    let chartDetections = null;
+    // v4: Dashboard state
     let _dashboardTimer = null;
+    let _dashCollapsed  = false;   // skip DOM updates when collapsed
 
     /* ═══════════════════════════════════════════════════════════════
      *  Feed
@@ -1816,42 +1817,27 @@
      *  v4: Performance Dashboard
      * ═══════════════════════════════════════════════════════════════ */
 
-    /** Initialize Chart.js charts once */
-    function initDashboardCharts() {
-        if (typeof Chart === "undefined") return;
-
-        const commonCfg = {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { ticks: { color: "#848e9c", font: { size: 9 } }, grid: { color: "rgba(255,255,255,.06)" } },
-                y: { ticks: { color: "#848e9c", font: { size: 9 } }, grid: { color: "rgba(255,255,255,.06)" } },
-            },
-        };
-
-        const pnlCanvas = document.getElementById("chart-pnl-hourly");
-        if (pnlCanvas) {
-            chartPnl = new Chart(pnlCanvas.getContext("2d"), {
-                type: "bar",
-                data: { labels: [], datasets: [{ label: "P&L USD", data: [], backgroundColor: [] }] },
-                options: { ...commonCfg },
-            });
+    /** Build lightweight mini-bar chart (pure DOM, no Canvas) */
+    function renderMiniBars(containerId, values, mode) {
+        const el = document.getElementById(containerId);
+        if (!el || !values || !values.length) return;
+        const max = Math.max(...values.map(v => Math.abs(v)), 1);
+        // Limit to last 12 bars for performance
+        const slice = values.slice(-12);
+        el.innerHTML = "";
+        const frag = document.createDocumentFragment();
+        for (const v of slice) {
+            const bar = document.createElement("div");
+            bar.className = "bar" + (mode === "pnl" ? (v >= 0 ? " pos" : " neg") : "");
+            bar.style.height = Math.max(2, (Math.abs(v) / max) * 100) + "%";
+            frag.appendChild(bar);
         }
-
-        const detCanvas = document.getElementById("chart-detections-hourly");
-        if (detCanvas) {
-            chartDetections = new Chart(detCanvas.getContext("2d"), {
-                type: "line",
-                data: { labels: [], datasets: [{ label: "Detecciones", data: [], borderColor: "#f0b90b", backgroundColor: "rgba(240,185,11,.15)", fill: true, tension: 0.3, pointRadius: 2 }] },
-                options: { ...commonCfg },
-            });
-        }
+        el.appendChild(frag);
     }
 
     /** Update the full dashboard from backend metrics_dashboard payload */
     function updateDashboard(dash) {
-        if (!dash) return;
+        if (!dash || _dashCollapsed) return;  // skip when collapsed
 
         // KPI cards
         const ts = dash.trade_stats || {};
@@ -1864,7 +1850,7 @@
         if (kpiFilterRate) kpiFilterRate.textContent   = (ds.filter_rate || 0).toFixed(1) + "%";
         if (kpiAvgSpeed)   kpiAvgSpeed.textContent     = (ds.avg_detection_ms || 0).toFixed(0) + "ms";
 
-        // Effectiveness grid
+        // Effectiveness chips
         const eff = dash.effectiveness || {};
         if (effSafe)      effSafe.textContent      = (eff.safe_token_pct || 0).toFixed(1) + "%";
         if (effAvgGain)   effAvgGain.textContent   = "+" + (eff.avg_gain_pct || 0).toFixed(1) + "%";
@@ -1873,25 +1859,22 @@
         if (effAvgHold)   effAvgHold.textContent    = (eff.avg_hold_minutes || 0).toFixed(0) + "m";
         if (effBestTrade) effBestTrade.textContent   = "+" + (eff.best_trade_pct || 0).toFixed(1) + "%";
 
-        // Color effectiveness values
-        [effAvgGain, effBestTrade].forEach(el => { if (el) { el.classList.remove("negative"); el.classList.add("positive"); } });
-        [effAvgLoss].forEach(el => { if (el) { el.classList.remove("positive"); el.classList.add("negative"); } });
-
         // Resource bar from dashboard
         if (dash.resource_stats) updateResourceBar(dash.resource_stats);
 
-        // Hourly charts
+        // Lightweight mini-bars (max 12 bars, pure DOM)
         const hourly = dash.hourly_series || {};
-        if (chartPnl && hourly.labels) {
-            chartPnl.data.labels = hourly.labels;
-            chartPnl.data.datasets[0].data = hourly.pnl || [];
-            chartPnl.data.datasets[0].backgroundColor = (hourly.pnl || []).map(v => v >= 0 ? "#02c076" : "#f6465d");
-            chartPnl.update("none");
+        if (hourly.pnl) {
+            renderMiniBars("bars-pnl", hourly.pnl, "pnl");
+            const last = hourly.pnl[hourly.pnl.length - 1];
+            const valEl = document.getElementById("bars-pnl-val");
+            if (valEl && last !== undefined) valEl.textContent = "$" + last.toFixed(2);
         }
-        if (chartDetections && hourly.labels) {
-            chartDetections.data.labels = hourly.labels;
-            chartDetections.data.datasets[0].data = hourly.detections || [];
-            chartDetections.update("none");
+        if (hourly.detections) {
+            renderMiniBars("bars-det", hourly.detections, "det");
+            const total = hourly.detections.reduce((a, b) => a + b, 0);
+            const valEl = document.getElementById("bars-det-val");
+            if (valEl) valEl.textContent = total + " total";
         }
     }
 
@@ -2051,14 +2034,23 @@
         });
     }
 
-    // Auto-refresh dashboard every 30s
+    // Dashboard toggle (collapse/expand) — skip updates when collapsed
+    if (btnToggleDash && dashboardBody) {
+        btnToggleDash.addEventListener("click", () => {
+            _dashCollapsed = !_dashCollapsed;
+            dashboardBody.classList.toggle("collapsed", _dashCollapsed);
+            btnToggleDash.textContent = _dashCollapsed ? "▶" : "▼";
+        });
+    }
+
+    // Auto-refresh dashboard every 60s (was 30s — reduce overhead)
     function startDashboardAutoRefresh() {
         if (_dashboardTimer) clearInterval(_dashboardTimer);
         _dashboardTimer = setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN && botRunning) {
+            if (ws && ws.readyState === WebSocket.OPEN && botRunning && !_dashCollapsed) {
                 sendWS({ action: "get_dashboard" });
             }
-        }, 30000);
+        }, 60000);
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -2072,8 +2064,7 @@
         }
     })();
 
-    // v4 init
-    initDashboardCharts();
+    // v4 init (no Chart.js needed)
     initTutorial();
     initAlertConfig();
     startDashboardAutoRefresh();

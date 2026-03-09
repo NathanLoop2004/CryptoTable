@@ -78,19 +78,30 @@ RPC_ENDPOINTS = {
 # Only RPCs that support eth_getLogs with topic filters
 RPC_FALLBACKS = {
     56: [
-        "https://bsc.drpc.org",
         "https://bsc-rpc.publicnode.com",
         "https://binance.llamarpc.com",
         "https://bsc-pokt.nodies.app",
         "https://bsc.meowrpc.com",
+        "https://bsc.drpc.org",
+        "https://bsc-dataseed1.binance.org",
+        "https://bsc-dataseed2.binance.org",
+        "https://bsc-dataseed3.binance.org",
+        "https://bsc-dataseed1.defibit.io",
+        "https://bsc-dataseed1.ninicoin.io",
     ],
     1: [
-        "https://eth.drpc.org",
         "https://ethereum-rpc.publicnode.com",
         "https://eth.llamarpc.com",
+        "https://eth.drpc.org",
         "https://eth.meowrpc.com",
+        "https://rpc.ankr.com/eth",
     ],
 }
+
+# Rate-limit backoff settings
+RPC_BACKOFF_BASE = 2.0       # seconds — initial backoff after 429
+RPC_BACKOFF_MAX  = 30.0      # seconds — max backoff per 429 cycle
+RPC_BACKOFF_DECAY = 0.8      # multiplier to reduce backoff after a success
 
 # PancakeSwap / Uniswap V2 Factory addresses
 FACTORY_ADDRESSES = {
@@ -1140,6 +1151,24 @@ class SniperBot:
                 logger.debug(f"Event callback error: {e}")
 
     # ─── Price fetcher ──────────────────────────────────────
+    async def _safe_get_block_number(self) -> int:
+        """Get current block number with RPC rotation on failure."""
+        for _attempt in range(min(len(self._rpc_list), 5)):
+            try:
+                block = self.w3.eth.block_number
+                return block
+            except Exception as e:
+                err_str = str(e)[:200]
+                is_429 = "429" in err_str or "Too Many Requests" in err_str
+                logger.debug(f"block_number failed on {self._rpc_list[self._rpc_index]}: {err_str[:80]}")
+                self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
+                new_rpc = self._rpc_list[self._rpc_index]
+                self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                await asyncio.sleep(1.0 if is_429 else 0.3)
+        # If all attempts fail, raise to let the main loop handle it
+        raise ConnectionError("All RPCs failed for block_number")
+
     async def _fetch_native_price(self):
         """Get native token USD price from Binance."""
         sym = "BNBUSDT" if self.chain_id == 56 else "ETHUSDT"
@@ -2280,10 +2309,17 @@ class SniperBot:
         slow_tick = 0              # Full refresh cycle (every ~15s)
         total_blocks_scanned = 0
         total_events_found = 0
+        _backoff = 0.0             # current backoff delay (0 = no backoff)
+        _consecutive_429 = 0      # consecutive 429 errors across all RPCs
 
         while self.running:
             try:
-                current_block = self.w3.eth.block_number
+                # Apply backoff if we hit rate limits
+                if _backoff > 0:
+                    await asyncio.sleep(_backoff)
+
+                # Protected block_number call with RPC rotation
+                current_block = await self._safe_get_block_number()
 
                 if current_block > last_block:
                     # Scan new blocks for PairCreated events
@@ -2303,6 +2339,7 @@ class SniperBot:
                     # Try getLogs with RPC rotation on failure
                     logs = None
                     last_rpc_err = ""
+                    _is_429_cycle = False
                     for _attempt in range(len(self._rpc_list)):
                         try:
                             logs = self.w3.eth.get_logs({
@@ -2313,15 +2350,23 @@ class SniperBot:
                                 ),
                                 "topics": [PAIR_CREATED_TOPIC],
                             })
+                            # Success — decay backoff
+                            if _backoff > 0:
+                                _backoff = max(0, _backoff * RPC_BACKOFF_DECAY - 0.5)
+                            _consecutive_429 = 0
                             break  # success
                         except Exception as e:
-                            last_rpc_err = str(e)[:120]
-                            logger.debug(f"RPC {self._rpc_list[self._rpc_index]} failed: {e}")
+                            err_str = str(e)[:200]
+                            last_rpc_err = err_str[:120]
+                            is_rate_limit = "429" in err_str or "Too Many Requests" in err_str or "rate" in err_str.lower()
+                            logger.debug(f"RPC {self._rpc_list[self._rpc_index]} failed: {err_str}")
                             # v4: record RPC error
                             self.resource_monitor.record_rpc_call(
                                 (time.time() - _pipeline_start) * 1000 if '_pipeline_start' in dir() else 0,
                                 success=False,
                             )
+                            if is_rate_limit:
+                                _is_429_cycle = True
                             # Rotate to next RPC
                             self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                             new_rpc = self._rpc_list[self._rpc_index]
@@ -2330,7 +2375,16 @@ class SniperBot:
                             await self._emit("scan_info", {
                                 "message": f"Switched RPC → {new_rpc}",
                             })
-                            await asyncio.sleep(0.5)
+                            # Brief pause — longer if 429
+                            await asyncio.sleep(1.5 if is_rate_limit else 0.5)
+
+                    # Update backoff based on 429 cycle
+                    if _is_429_cycle:
+                        _consecutive_429 += 1
+                        _backoff = min(RPC_BACKOFF_MAX, RPC_BACKOFF_BASE * (1.5 ** (_consecutive_429 - 1)))
+                        await self._emit("scan_info", {
+                            "message": f"⏳ Rate-limited — backing off {_backoff:.1f}s (cycle #{_consecutive_429})",
+                        })
 
                     if logs is not None:
                         total_blocks_scanned += blocks_range
@@ -2409,8 +2463,23 @@ class SniperBot:
                 })
 
             except Exception as e:
-                logger.warning(f"Sniper loop error: {e}")
-                await self._emit("error", {"message": str(e)[:200]})
+                err_msg = str(e)[:200]
+                is_rate_limit = "429" in err_msg or "Too Many Requests" in err_msg or "rate" in err_msg.lower()
+                if is_rate_limit:
+                    _consecutive_429 += 1
+                    _backoff = min(RPC_BACKOFF_MAX, RPC_BACKOFF_BASE * (1.5 ** (_consecutive_429 - 1)))
+                    logger.warning(f"Rate-limited (block_number or other) — backoff {_backoff:.1f}s")
+                    # Rotate RPC so next attempt uses a different endpoint
+                    self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
+                    new_rpc = self._rpc_list[self._rpc_index]
+                    self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                    self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session)
+                    await self._emit("scan_info", {
+                        "message": f"⏳ 429 on block fetch — switched to {new_rpc}, backoff {_backoff:.1f}s",
+                    })
+                else:
+                    logger.warning(f"Sniper loop error: {e}")
+                    await self._emit("error", {"message": err_msg})
 
             await asyncio.sleep(float(self.settings.get("poll_interval", 1.5)))
 

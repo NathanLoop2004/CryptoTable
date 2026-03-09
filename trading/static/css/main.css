@@ -6,6 +6,7 @@
     --bg-primary:    #0B0E11;
     --bg-secondary:  #1E2329;
     --bg-card:       #181A20;
+    --bg-panel:      #181A20;
     --bg-hover:      #2B3139;
     --bg-input:      #2B3139;
     --border:        #2B3139;
@@ -2420,105 +2421,136 @@ body.resizing-col *, body.resizing-row * {
 
 
 /* ================================================================
-   v4: Performance Dashboard
+   v4: Performance Dashboard  (lightweight / GPU-friendly)
    ================================================================ */
 
+.dashboard-card {
+    border-left: 3px solid var(--accent) !important;
+}
+.dashboard-card .sc-title { color: var(--accent); }
+
+/* Collapsible — use display toggle (no max-height animation = no layout thrash) */
+.dashboard-body.collapsed { display: none; }
+.btn-toggle-dash {
+    background: none; border: none; color: var(--text-secondary);
+    font-size: 0.85rem; cursor: pointer; padding: 2px 6px;
+}
+
 .sc-title-row {
-    display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;
 }
 .sc-title-row .sc-title { margin-bottom: 0; }
 .btn-sm { padding: 4px 10px; font-size: 0.75rem; }
 
-/* KPI Cards */
+/* KPI strip — single row, no grid overhead */
 .kpi-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 8px;
-    margin-bottom: 14px;
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;       /* hide scrollbar */
 }
+.kpi-row::-webkit-scrollbar { display: none; }
 .kpi-card {
+    flex: 1 0 90px;
+    min-width: 90px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 10px 12px;
+    padding: 6px 8px;
     text-align: center;
 }
 .kpi-value {
-    font-size: 1.2rem;
+    font-size: 1rem;
     font-weight: 700;
     color: var(--text-primary);
     font-family: var(--mono);
+    line-height: 1.2;
 }
 .kpi-label {
-    font-size: 0.65rem;
+    font-size: 0.6rem;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-top: 2px;
+    letter-spacing: 0.4px;
 }
 .kpi-winrate .kpi-value { color: var(--green); }
-.kpi-pnl .kpi-value { color: var(--accent); }
-.kpi-filter .kpi-value { color: var(--yellow); }
+.kpi-pnl .kpi-value    { color: var(--accent); }
+.kpi-filter .kpi-value  { color: var(--yellow); }
 
-/* Dashboard Charts */
-.dashboard-charts {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-bottom: 14px;
-}
-.dash-chart-box {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px;
-}
-.dash-chart-title {
-    font-size: 0.7rem;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
-}
-
-/* Effectiveness Grid */
-.effectiveness-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-    gap: 6px;
+/* Lightweight mini-bars (replace heavy Chart.js canvases) */
+.dash-bars-row {
+    display: flex;
+    gap: 8px;
     margin-bottom: 10px;
 }
-.eff-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 6px;
+.dash-minibar {
+    flex: 1;
     background: var(--bg-secondary);
-    border-radius: var(--radius);
     border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 8px;
 }
-.eff-label {
+.dash-minibar-title {
     font-size: 0.6rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
+    margin-bottom: 4px;
     text-transform: uppercase;
 }
-.eff-value {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-primary);
+.dash-minibar-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 32px;
+}
+.dash-minibar-bars .bar {
+    flex: 1;
+    min-width: 3px;
+    border-radius: 1px 1px 0 0;
+    background: var(--accent);
+    transition: height 0.15s ease;
+}
+.dash-minibar-bars .bar.neg { background: var(--red); }
+.dash-minibar-bars .bar.pos { background: var(--green); }
+.dash-minibar-value {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Effectiveness — compact inline row */
+.effectiveness-row {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+.eff-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 7px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.65rem;
     font-family: var(--mono);
 }
-.eff-value.positive { color: var(--green); }
-.eff-value.negative { color: var(--red); }
+.eff-chip-label { color: var(--text-muted); }
+.eff-chip-val   { font-weight: 600; color: var(--text-primary); }
+.eff-chip-val.pos { color: var(--green); }
+.eff-chip-val.neg { color: var(--red); }
 
-/* Resource Monitor Bar */
+/* Resource bar — tighter */
 .resource-bar {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
-    padding: 8px 10px;
+    gap: 10px;
+    padding: 5px 8px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: var(--text-secondary);
     font-family: var(--mono);
 }
@@ -2714,8 +2746,10 @@ body.resizing-col *, body.resizing-row * {
 .tutorial-no-show input { width: 14px; height: 14px; }
 
 @media (max-width: 600px) {
-    .kpi-row { grid-template-columns: repeat(3, 1fr); }
-    .dashboard-charts { grid-template-columns: 1fr; }
-    .effectiveness-grid { grid-template-columns: repeat(3, 1fr); }
+    .kpi-row { gap: 4px; }
+    .kpi-card { flex: 1 0 70px; min-width: 70px; padding: 4px 6px; }
+    .kpi-value { font-size: 0.85rem; }
+    .dash-bars-row { flex-direction: column; }
+    .effectiveness-row { gap: 3px; }
     .tutorial-card { width: 95vw; }
 }

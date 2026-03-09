@@ -236,86 +236,75 @@
             <!-- ═══ v4: Performance Dashboard ═══ -->
             <div class="sniper-card dashboard-card" id="metrics-dashboard">
                 <div class="sc-title-row">
-                    <h3 class="sc-title">📊 Performance Dashboard</h3>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <button class="btn-toggle-dash" id="btn-toggle-dashboard" title="Expand/Collapse">▼</button>
+                        <h3 class="sc-title">📊 Performance Dashboard</h3>
+                    </div>
                     <button class="btn-sniper btn-sm" id="btn-refresh-dashboard" title="Refresh metrics">🔄</button>
                 </div>
 
-                <!-- KPI Cards Row -->
+                <div class="dashboard-body" id="dashboard-body">
+                <!-- KPI Strip -->
                 <div class="kpi-row">
                     <div class="kpi-card kpi-trades">
-                        <div class="kpi-value" id="kpi-total-trades">0</div>
-                        <div class="kpi-label">Total Trades</div>
+                        <div class="kpi-value" id="kpi-trades">0</div>
+                        <div class="kpi-label">Trades</div>
                     </div>
                     <div class="kpi-card kpi-winrate">
-                        <div class="kpi-value" id="kpi-win-rate">0%</div>
-                        <div class="kpi-label">Win Rate</div>
+                        <div class="kpi-value" id="kpi-winrate">0%</div>
+                        <div class="kpi-label">Win</div>
                     </div>
                     <div class="kpi-card kpi-pnl">
-                        <div class="kpi-value" id="kpi-total-pnl">$0.00</div>
-                        <div class="kpi-label">Total P&L</div>
+                        <div class="kpi-value" id="kpi-pnl">$0</div>
+                        <div class="kpi-label">P&amp;L</div>
                     </div>
                     <div class="kpi-card kpi-detections">
                         <div class="kpi-value" id="kpi-detections">0</div>
-                        <div class="kpi-label">Tokens Analyzed</div>
+                        <div class="kpi-label">Tokens</div>
                     </div>
                     <div class="kpi-card kpi-filter">
                         <div class="kpi-value" id="kpi-filter-rate">0%</div>
-                        <div class="kpi-label">Filter Rate</div>
+                        <div class="kpi-label">Filter</div>
                     </div>
                     <div class="kpi-card kpi-speed">
                         <div class="kpi-value" id="kpi-avg-speed">0ms</div>
-                        <div class="kpi-label">Avg Analysis</div>
+                        <div class="kpi-label">Speed</div>
                     </div>
                 </div>
 
-                <!-- Charts Row -->
-                <div class="dashboard-charts">
-                    <div class="dash-chart-box">
-                        <h4 class="dash-chart-title">📈 P&L por Hora</h4>
-                        <canvas id="chart-pnl-hourly" height="160"></canvas>
+                <!-- Mini-bars (lightweight, no Chart.js) -->
+                <div class="dash-bars-row">
+                    <div class="dash-minibar">
+                        <div class="dash-minibar-title">📈 P&amp;L /h</div>
+                        <div class="dash-minibar-bars" id="bars-pnl"></div>
+                        <div class="dash-minibar-value" id="bars-pnl-val">—</div>
                     </div>
-                    <div class="dash-chart-box">
-                        <h4 class="dash-chart-title">🔍 Detecciones por Hora</h4>
-                        <canvas id="chart-detections-hourly" height="160"></canvas>
-                    </div>
-                </div>
-
-                <!-- Effectiveness Summary -->
-                <div class="effectiveness-grid">
-                    <div class="eff-item">
-                        <span class="eff-label">Avg Gain</span>
-                        <span class="eff-value positive" id="eff-avg-gain">+0%</span>
-                    </div>
-                    <div class="eff-item">
-                        <span class="eff-label">Avg Loss</span>
-                        <span class="eff-value negative" id="eff-avg-loss">-0%</span>
-                    </div>
-                    <div class="eff-item">
-                        <span class="eff-label">Risk/Reward</span>
-                        <span class="eff-value" id="eff-risk-reward">0:1</span>
-                    </div>
-                    <div class="eff-item">
-                        <span class="eff-label">Rugs Detected</span>
-                        <span class="eff-value" id="eff-rugs">0</span>
-                    </div>
-                    <div class="eff-item">
-                        <span class="eff-label">Alerts Total</span>
-                        <span class="eff-value" id="eff-alerts">0</span>
-                    </div>
-                    <div class="eff-item">
-                        <span class="eff-label">Uptime</span>
-                        <span class="eff-value" id="eff-uptime">0m</span>
+                    <div class="dash-minibar">
+                        <div class="dash-minibar-title">🔍 Detections /h</div>
+                        <div class="dash-minibar-bars" id="bars-det"></div>
+                        <div class="dash-minibar-value" id="bars-det-val">—</div>
                     </div>
                 </div>
 
-                <!-- Resource Monitor Bar -->
+                <!-- Effectiveness chips -->
+                <div class="effectiveness-row">
+                    <span class="eff-chip"><span class="eff-chip-label">Safe</span><span class="eff-chip-val pos" id="eff-safe-pct">0%</span></span>
+                    <span class="eff-chip"><span class="eff-chip-label">Gain</span><span class="eff-chip-val pos" id="eff-avg-gain">+0%</span></span>
+                    <span class="eff-chip"><span class="eff-chip-label">Loss</span><span class="eff-chip-val neg" id="eff-avg-loss">-0%</span></span>
+                    <span class="eff-chip"><span class="eff-chip-label">Fail</span><span class="eff-chip-val" id="eff-tx-fail">0%</span></span>
+                    <span class="eff-chip"><span class="eff-chip-label">Hold</span><span class="eff-chip-val" id="eff-avg-hold">0m</span></span>
+                    <span class="eff-chip"><span class="eff-chip-label">Best</span><span class="eff-chip-val pos" id="eff-best-trade">+0%</span></span>
+                </div>
+
+                <!-- Resource bar -->
                 <div class="resource-bar" id="resource-bar">
-                    <span class="res-item">🖥️ MEM: <span id="res-mem">—</span></span>
-                    <span class="res-item">⚡ CPU: <span id="res-cpu">—</span></span>
-                    <span class="res-item">📡 WS: <span id="res-ws">0</span></span>
-                    <span class="res-item">🔗 RPC: <span id="res-rpc">0</span></span>
-                    <span class="res-item">🎯 Tokens/min: <span id="res-tpm">0</span></span>
+                    <span class="res-item">🖥️ <span id="res-memory">—</span></span>
+                    <span class="res-item">⚡ <span id="res-cpu">—</span></span>
+                    <span class="res-item">🪙 <span id="res-tokens">0</span></span>
+                    <span class="res-item">📡 <span id="res-ws">0</span></span>
+                    <span class="res-item">🔗 <span id="res-rpc">0</span></span>
                 </div>
+                </div><!-- /dashboard-body -->
             </div>
 
             <!-- Detected Tokens Modal Trigger (table is in the modal) -->
@@ -555,7 +544,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js" crossorigin="anonymous"></script>
 <script src="{% static 'js/transactions.js' %}"></script>
 <script src="{% static 'js/walletConnect.js' %}"></script>
