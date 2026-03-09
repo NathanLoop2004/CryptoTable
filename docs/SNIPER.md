@@ -1,7 +1,7 @@
 # Sniper Bot — Documentación Técnica Completa
 
 > Motor de detección y trading automático de tokens nuevos en BSC/ETH.  
-> Archivo principal: `trading/Services/sniperService.py` (~1860 líneas)
+> Archivo principal: `trading/Services/sniperService.py` (~1980 líneas)
 
 ---
 
@@ -107,6 +107,11 @@ Contiene **TODA** la información de un token analizado:
 | `owner_can_change_balance` | bool | Owner modifica balances |
 | `cannot_sell_all` | bool | No puedes vender el 100% |
 | `is_open_source` | bool | Código verificado |
+| `can_take_back_ownership` | bool | Owner puede reclamar ownership |
+| `is_airdrop_scam` | bool | Token de airdrop scam |
+| `is_true_token` | bool | ERC-20 real (no fake interface) |
+| `top_holder_percent` | float | % supply del top holder (no LP/dead) |
+| `creator_percent` | float | % supply retenido por el creator |
 | **Cross-Platform** | | |
 | `listed_coingecko` | bool | Listado en CoinGecko |
 | `tokensniffer_score` | int | Score 0-100 (-1 = sin datos) |
@@ -201,12 +206,17 @@ async def analyze(self, token_address: str) -> TokenInfo:
 ### 1. GoPlus Security (`_check_goplus_api`)
 
 - **URL:** `https://api.gopluslabs.io/api/v1/token_security/{chain_id}?contract_addresses={addr}`
-- **Qué detecta:** 15+ flags de seguridad + información de LP lock
+- **Qué detecta:** 18+ flags de seguridad + LP lock + holder concentration
 - **LP Lock Detection:**
   - Itera `lp_holders[].is_locked`, acumula `total_lp_locked_pct`
   - Busca `locked_detail[].end_time` para encontrar el lock más largo (`best_lock_end`)
   - Identifica fuente: **PinkLock**, **Unicrypt**, **Team.Finance** (por nombre del holder)
   - Calcula `lp_lock_hours_remaining` desde `best_lock_end`
+- **Holder Concentration:**
+  - Itera `holders[]`, excluye LP holders, dead addresses y locked wallets
+  - Calcula `top_holder_percent` — el % del supply del mayor holder individual
+  - Calcula `creator_percent` — cuánto retiene el deployer del contrato
+- **Nuevas flags (hardened):** `can_take_back_ownership`, `is_airdrop_scam`, `is_true_token`
 
 ### 2. Honeypot.is (`_check_honeypot_api`)
 
@@ -247,6 +257,7 @@ Reconstruye la lista de razones desde las flags almacenadas. Se ejecuta en cada 
 |---|---|
 | **Honeypot** | 🍯 Honeypot detectado, 💰 Buy tax: 5%, Sell tax: 8% |
 | **GoPlus Flags** | 🖨️ Mintable, 🚫 Blacklist, ⏸️ Pausable, 🔄 Proxy... |
+| **Hardened Flags** | 🚨 Can reclaim ownership, 🚨 Airdrop scam, 🚨 Fake ERC-20, 🐋 Top holder 35%, 👨‍💻 Creator 25% |
 | **TokenSniffer** | 🔍 TokenSniffer: 45/100, 🚨 Detectado como SCAM |
 | **LP Lock** | 🔒 LP Locked 95% — 720h restantes, 🔐 Lock via: PinkLock |
 | **LP Lock Warnings** | ⚠️ Lock insuficiente: solo 30% (mínimo 80%), ⚠️ Lock demasiado corto: 12h (mínimo 24h), 🚨 Lock EXPIRADO |
@@ -261,12 +272,24 @@ Clasifica el token basado en flags activos:
 ```
 DANGER si:
   - is_honeypot
-  - tokensniffer_is_scam
+  - tokensniffer_is_scam / score < 20
   - can_self_destruct
-  - ≥3 warning flags combinadas (blacklist, mintable, proxy, hidden owner, etc.)
+  - owner_can_change_balance / cannot_sell_all
+  - ── Hardened (bloqueo inmediato) ──
+  - is_proxy (puede cambiar TODA la lógica)
+  - !is_open_source (código no verificado = trampa potencial)
+  - has_hidden_owner (control invisible)
+  - can_take_back_ownership (fake renounce)
+  - is_airdrop_scam
+  - !is_true_token (fake ERC-20)
+  - top_holder_percent >= 30% (1 whale controla el supply)
+  - creator_percent >= 20% (deployer retuvo demasiado)
+  - ≥3 warning flags combinadas
 
 WARNING si:
-  - ≥1 warning flag
+  - ≥1 warning flag (mintable, blacklist, pause, external_call, etc.)
+  - top_holder >= 15%, creator >= 10%
+  - holder_count < 10
   - API coverage insuficiente (<2 APIs OK)
 
 SAFE si:
@@ -318,7 +341,22 @@ Antes de emitir `snipe_opportunity`, el bot ejecuta TODOS estos filtros. Si cual
 | Sell tax | `sell_tax > max_sell_tax` (default 15%) |
 | Honeypot | `is_honeypot == True` |
 
-### 2. LP Lock Validation (Anti Rug-Pull)
+### 2. Verificación del Contrato (Hardened)
+
+Estas verificaciones requieren que GoPlus haya respondido (`_goplus_ok = True`):
+
+| Condición | Resultado | Razón |
+|---|---|---|
+| Código no verificado | ❌ Rechazado | Owner puede ocultar funciones maliciosas |
+| Contrato proxy | ❌ Rechazado | Puede cambiar TODA la lógica post-compra |
+| Owner oculto | ❌ Rechazado | Control invisible del contrato |
+| Puede reclamar ownership | ❌ Rechazado | Finge renunciar pero puede reclamar |
+| Airdrop scam | ❌ Rechazado | Token de estafa de airdrop |
+| Token falso (no ERC-20) | ❌ Rechazado | Interface fake |
+| Top holder ≥ 30% supply | ❌ Rechazado | 1 whale puede dumpear todo |
+| Creator retiene ≥ 20% | ❌ Rechazado | Deployer puede dumpear |
+
+### 3. LP Lock Validation (Anti Rug-Pull)
 
 | Condición | Resultado | Log |
 |---|---|---|
@@ -328,7 +366,7 @@ Antes de emitir `snipe_opportunity`, el bot ejecuta TODOS estos filtros. Si cual
 | LP lock expirado | ❌ Rechazado | (hrs_remaining < 0) |
 | LP bloqueada ≥80% Y ≥24h | ✅ Aprobado | — |
 
-### 3. Price History Check (Smart Entry Gate)
+### 4. Price History Check (Smart Entry Gate)
 
 | Condición | Resultado | Razón |
 |---|---|---|
@@ -338,7 +376,7 @@ Antes de emitir `snipe_opportunity`, el bot ejecuta TODOS estos filtros. Si cual
 | 5m ≥ +30% | ❌ Rechazado | Ya bombeado — mala entrada |
 | 1h ≥ +50% | ❌ Rechazado | Ya bombeado — mala entrada |
 
-### 4. Liquidez Mínima
+### 5. Liquidez Mínima
 
 - `liquidity_usd >= min_liquidity_usd` (default $5,000)
 
@@ -627,14 +665,19 @@ Fallbacks WS: `wss://bsc.drpc.org`, `wss://eth.drpc.org`
 El bot tiene **múltiples capas** de protección:
 
 ```
-Capa 1: 5 APIs de seguridad → detecta flags peligrosos
-Capa 2: LP Lock ≥80% obligatorio → owner no controla liquidez  
-Capa 3: LP Lock ≥24h obligatorio → lock no expira pronto
-Capa 4: Smart Entry → no compra tokens ya bombeados
-Capa 5: Price dump check → no compra tokens en caída libre
-Capa 6: Stop Loss 20% → venta automática si cae
-Capa 7: Max Hold Hours → vende 1h antes de que expire el lock
-Capa 8: Sync WS Listener → detecta cambios de precio en real-time
+Capa 1: 5 APIs de seguridad → detecta 18+ flags peligrosos
+Capa 2: Código verificado obligatorio → no compra contratos ocultos
+Capa 3: Anti-proxy → bloquea contratos que pueden cambiar lógica
+Capa 4: Anti-hidden-owner → bloquea control invisible
+Capa 5: Anti-fake-renounce → detecta can_take_back_ownership
+Capa 6: Holder concentration → top holder < 30%, creator < 20%
+Capa 7: LP Lock ≥80% obligatorio → owner no controla liquidez
+Capa 8: LP Lock ≥24h obligatorio → lock no expira pronto
+Capa 9: Smart Entry → no compra tokens ya bombeados
+Capa 10: Price dump check → no compra tokens en caída libre
+Capa 11: Stop Loss 20% → venta automática si cae
+Capa 12: Max Hold Hours → vende 1h antes de que expire el lock
+Capa 13: Sync WS Listener → detecta cambios de precio en real-time
 ```
 
 ---

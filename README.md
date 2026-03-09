@@ -127,23 +127,24 @@ http://127.0.0.1:8000/
 2. **Detecta** → Busca eventos `PairCreated` en PancakeSwap/Uniswap
 3. **Verifica liquidez** → `pair.getReserves()` → mínimo $5,000 USD
 4. **Analiza** → Para CADA token detectado, consulta **5 APIs de seguridad**:
-   - **GoPlus Security** — 15+ flags de seguridad + LP lock info
+   - **GoPlus Security** — 18+ flags de seguridad + LP lock + holder concentration
    - **Honeypot.is** — Detecta honeypots, buy/sell tax
    - **DexScreener** — Volumen, liquidez, edad, precio histórico (m5, h1, h6, h24)
    - **CoinGecko** — Verificación de listing legítimo
    - **TokenSniffer** — Score de scam (0-100), detección de estafa
 5. **Clasifica riesgo** → SAFE 🟢 / WARNING 🟡 / DANGER 🔴
-6. **Smart Entry Gate** → Rechaza tokens ya bombeados (+30% en 5m, +50% en 1h)
-7. **LP Lock Gate** → Requiere LP bloqueado ≥80% por ≥24h
-8. **Auto-Buy** → Ejecuta swap via ethers.js desde el navegador
-9. **P&L Monitoring** → Actualiza cada ~3s con TP/SL automático
-10. **Auto-Sell** → Vende automáticamente al alcanzar TP, SL, o límite de tiempo
+6. **Verifica contrato** → Código verificado, no-proxy, no-hidden owner, holder concentration
+7. **Smart Entry Gate** → Rechaza tokens ya bombeados (+30% en 5m, +50% en 1h)
+8. **LP Lock Gate** → Requiere LP bloqueado ≥80% por ≥24h
+9. **Auto-Buy** → Ejecuta swap via ethers.js desde el navegador
+10. **P&L Monitoring** → Actualiza cada ~3s con TP/SL automático
+11. **Auto-Sell** → Vende automáticamente al alcanzar TP, SL, o límite de tiempo
 
 ### 5 APIs de seguridad
 
 | API | Qué detecta |
 |---|---|
-| 🛡️ **GoPlus** | Honeypot, mintable, blacklist, proxy, hidden owner, LP lock, holder count |
+| � **GoPlus** | Honeypot, mintable, blacklist, proxy, hidden owner, LP lock, holder concentration, fake renounce |
 | 🍯 **Honeypot.is** | Simulación real de buy/sell, tax exacto, honeypot |
 | 📊 **DexScreener** | Volumen 24h, liquidez, buys/sells, edad del par, cambio de precio (m5/h1/h6/h24) |
 | 🦎 **CoinGecko** | Verificación de listing, links sociales, website |
@@ -169,7 +170,27 @@ http://127.0.0.1:8000/
 | 👤 Hidden owner | Owner oculto |
 | 👑 Has owner | Contrato tiene dueño con privilegios |
 | 🔒 Not verified | Código fuente no publicado |
-| 🔑 LP Lock | Liquidez bloqueada (PinkLock, Unicrypt, Team.Finance) |
+| � LP Lock | Liquidez bloqueada (PinkLock, Unicrypt, Team.Finance) |
+| 🚨 Fake renounce | Owner puede reclamar ownership después de renunciar |
+| 🚨 Airdrop scam | Token de estafa de airdrop |
+| 🚨 Fake ERC-20 | Interface falsa, no es token real |
+| 🐋 Top holder >30% | 1 wallet controla >30% del supply |
+| 👨‍💻 Creator >20% | El deployer retiene >20% del supply |
+
+### Verificación del contrato (hardened)
+
+El bot requiere que el contrato pase verificaciones estrictas antes de comprar:
+
+| Condición | Resultado |
+|---|---|
+| Código no verificado (no open source) | ❌ **Rechazado** — código oculto = trap |
+| Contrato proxy | ❌ **Rechazado** — puede cambiar toda la lógica |
+| Owner oculto | ❌ **Rechazado** — control invisible |
+| Puede reclamar ownership | ❌ **Rechazado** — finge renunciar |
+| Token de airdrop scam | ❌ **Rechazado** |
+| Token falso (no ERC-20) | ❌ **Rechazado** |
+| Top holder ≥ 30% supply | ❌ **Rechazado** — riesgo de dump |
+| Creator retiene ≥ 20% supply | ❌ **Rechazado** — riesgo de dump |
 
 ### Validación de LP Lock (anti rug-pull)
 

@@ -171,8 +171,13 @@ class TokenInfo:
     personal_slippage_modifiable: bool = False
     is_anti_whale: bool = False
     is_open_source: bool = False
+    can_take_back_ownership: bool = False   # owner renounced but can reclaim
+    is_airdrop_scam: bool = False           # GoPlus airdrop scam detection
+    is_true_token: bool = True              # true ERC-20 or fake interface
     lp_holder_count: int = 0
     holder_count: int = 0
+    top_holder_percent: float = 0           # % supply held by top non-LP holder
+    creator_percent: float = 0              # % supply held by creator
     creator_address: str = ""
     # ── Cross-platform verification ──
     listed_coingecko: bool = False
@@ -403,6 +408,9 @@ class ContractAnalyzer:
             info.has_trading_cooldown     = flag("trading_cooldown")
             info.personal_slippage_modifiable = flag("personal_slippage_modifiable")
             info.is_anti_whale       = flag("is_anti_whale")
+            info.can_take_back_ownership = flag("can_take_back_ownership")
+            info.is_airdrop_scam     = flag("is_airdrop_scam")
+            info.is_true_token       = flag("is_true_token") if "is_true_token" in result else True
 
             # If honeypot.is didn't catch it, GoPlus might
             if flag("is_honeypot") and not info.is_honeypot:
@@ -432,6 +440,38 @@ class ContractAnalyzer:
                 pass
 
             info.creator_address = result.get("creator_address", "")
+
+            # ── Top holder concentration ──
+            holders = result.get("holders", [])
+            if holders:
+                # Find the largest non-LP, non-dead, non-lock holder
+                dead_addrs = {"0x0000000000000000000000000000000000000000",
+                              "0x000000000000000000000000000000000000dead",
+                              "0x0000000000000000000000000000000000000001"}
+                lp_addrs = {lp.get("address", "").lower() for lp in result.get("lp_holders", [])}
+                for h in holders:
+                    h_addr = h.get("address", "").lower()
+                    if h_addr in dead_addrs or h_addr in lp_addrs:
+                        continue
+                    if str(h.get("is_locked", "0")) == "1":
+                        continue
+                    try:
+                        pct = float(h.get("percent", 0)) * 100
+                        if pct > info.top_holder_percent:
+                            info.top_holder_percent = round(pct, 2)
+                    except (ValueError, TypeError):
+                        pass
+
+            # Creator balance check
+            if info.creator_address:
+                creator_lower = info.creator_address.lower()
+                for h in holders:
+                    if h.get("address", "").lower() == creator_lower:
+                        try:
+                            info.creator_percent = round(float(h.get("percent", 0)) * 100, 2)
+                        except (ValueError, TypeError):
+                            pass
+                        break
 
             # ── LP Lock detection ──
             lp_holders = result.get("lp_holders", [])
@@ -673,9 +713,9 @@ class ContractAnalyzer:
         # ── From GoPlus flags ──
         if info._goplus_ok:
             if not info.is_open_source:
-                reasons.append("🔒 Código no verificado (no open source)")
+                reasons.append("🔒 Código NO verificado — PELIGRO")
             if info.is_proxy:
-                reasons.append("🔄 Contrato proxy — puede cambiar la lógica")
+                reasons.append("🔄 Contrato proxy — puede cambiar TODA la lógica")
             if info.is_mintable:
                 reasons.append("🖨️ Owner puede crear más tokens (mint)")
             if info.has_blacklist:
@@ -683,7 +723,7 @@ class ContractAnalyzer:
             if info.can_pause_trading:
                 reasons.append("⏸️ Puede pausar el trading")
             if info.has_hidden_owner:
-                reasons.append("👤 Owner oculto")
+                reasons.append("👤 Owner oculto — control invisible")
             if info.can_self_destruct:
                 reasons.append("💣 Contrato puede autodestruirse")
             if info.has_external_call:
@@ -696,6 +736,23 @@ class ContractAnalyzer:
                 reasons.append("⏳ Cooldown entre trades")
             if info.personal_slippage_modifiable:
                 reasons.append("📊 Slippage modificable por el owner")
+            # ── Hardened contract flags ──
+            if info.can_take_back_ownership:
+                reasons.append("🚨 Owner puede RECLAMAR ownership después de renunciar")
+            if info.is_airdrop_scam:
+                reasons.append("🚨 Token de AIRDROP SCAM")
+            if not info.is_true_token:
+                reasons.append("🚨 Token FALSO — no es ERC-20 real")
+            if info.top_holder_percent >= 30:
+                reasons.append(f"🐋 Top holder tiene {info.top_holder_percent}% del supply — riesgo de dump")
+            elif info.top_holder_percent >= 15:
+                reasons.append(f"🐋 Top holder tiene {info.top_holder_percent}% del supply")
+            if info.creator_percent >= 20:
+                reasons.append(f"👨‍💻 Creator retiene {info.creator_percent}% del supply — riesgo de dump")
+            elif info.creator_percent >= 10:
+                reasons.append(f"👨‍💻 Creator retiene {info.creator_percent}% del supply")
+            if info.holder_count > 0 and info.holder_count < 10:
+                reasons.append(f"👥 Solo {info.holder_count} holders — token sospechoso")
 
         # ── From TokenSniffer flags ──
         if info._tokensniffer_ok:
@@ -769,11 +826,34 @@ class ContractAnalyzer:
             info.cannot_sell_all,
             info.tokensniffer_is_scam,
             info.tokensniffer_score != -1 and info.tokensniffer_score < 20,
+            # ── Hardened contract verification ──
+            info.is_proxy,                          # can change ALL logic post-deploy
+            info.can_take_back_ownership,            # owner fakes renounce
+            info.is_airdrop_scam,                    # scam airdrop token
+            not info.is_true_token if info._goplus_ok else False,  # fake ERC-20
+            not info.is_open_source if info._goplus_ok else False,  # unverified = hidden code
+            info.has_hidden_owner,                   # invisible control
+            info.top_holder_percent >= 30,           # 1 whale holds 30%+ supply
+            info.creator_percent >= 20,              # creator kept 20%+ supply
         ]
         if any(danger_flags):
             info.risk = "danger"
             if info.sell_tax > 30 or info.buy_tax > 30:
                 info.risk_reasons.append("💀 Tax > 30%")
+            if info.is_proxy:
+                info.risk_reasons.append("💀 Proxy — puede cambiar TODA la lógica")
+            if info.can_take_back_ownership:
+                info.risk_reasons.append("💀 Owner puede reclamar ownership")
+            if not info.is_true_token and info._goplus_ok:
+                info.risk_reasons.append("💀 Token falso — no es un ERC-20 real")
+            if not info.is_open_source and info._goplus_ok:
+                info.risk_reasons.append("💀 Código NO verificado — posible trampa")
+            if info.has_hidden_owner:
+                info.risk_reasons.append("💀 Owner oculto — control invisible")
+            if info.top_holder_percent >= 30:
+                info.risk_reasons.append(f"💀 Top holder tiene {info.top_holder_percent}% del supply")
+            if info.creator_percent >= 20:
+                info.risk_reasons.append(f"💀 Creator retiene {info.creator_percent}% del supply")
             return
 
         # ── WARNING: suspicious but not fatal ──
@@ -781,13 +861,14 @@ class ContractAnalyzer:
             info.is_mintable,
             info.has_blacklist,
             info.can_pause_trading,
-            info.is_proxy,
-            info.has_hidden_owner,
             info.has_external_call,
             info.personal_slippage_modifiable,
             info.sell_tax > 10 or info.buy_tax > 10,
             info.has_owner,
-            not info.is_open_source if info._goplus_ok else False,
+            info.has_trading_cooldown,
+            info.top_holder_percent >= 15,           # whale holds 15-30%
+            info.creator_percent >= 10,              # creator kept 10-20%
+            info._goplus_ok and info.holder_count > 0 and info.holder_count < 10,
             # Cross-platform signals
             info._dexscreener_ok and info.dexscreener_age_hours < 1,
             info._dexscreener_ok and (info.dexscreener_buys_24h + info.dexscreener_sells_24h) < 5,
@@ -1134,6 +1215,24 @@ class SniperBot:
                                 passes = False
                             if info.is_honeypot:
                                 passes = False
+                            # Hardened contract checks
+                            if info._goplus_ok:
+                                if not info.is_open_source:
+                                    passes = False
+                                if info.is_proxy:
+                                    passes = False
+                                if info.has_hidden_owner:
+                                    passes = False
+                                if info.can_take_back_ownership:
+                                    passes = False
+                                if info.is_airdrop_scam:
+                                    passes = False
+                                if not info.is_true_token:
+                                    passes = False
+                                if info.top_holder_percent >= 30:
+                                    passes = False
+                                if info.creator_percent >= 20:
+                                    passes = False
                             if not info.lp_locked:
                                 passes = False
                             elif info.lp_lock_percent < 80:
@@ -1275,6 +1374,33 @@ class SniperBot:
             passes_safety = False
         if token_info.is_honeypot:
             passes_safety = False
+
+        # ── Hardened contract verification ──
+        if token_info._goplus_ok:
+            if not token_info.is_open_source:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: code NOT verified (not open source)")
+            if token_info.is_proxy:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: proxy contract — can change logic")
+            if token_info.has_hidden_owner:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: hidden owner")
+            if token_info.can_take_back_ownership:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: can reclaim ownership")
+            if token_info.is_airdrop_scam:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: airdrop scam")
+            if not token_info.is_true_token:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: fake ERC-20")
+            if token_info.top_holder_percent >= 30:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: top holder has {token_info.top_holder_percent}% supply")
+            if token_info.creator_percent >= 20:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: creator retains {token_info.creator_percent}% supply")
 
         # LP must be locked sufficiently to prevent rug pull
         if not token_info.lp_locked:

@@ -3,10 +3,13 @@ trading app — Plataforma de Trading + Sniper Bot BSC/ETH
 
 Módulos principales:
 ───────────────────
-  Services/sniperService.py   (~1860 líneas)
+  Services/sniperService.py   (~1980 líneas)
       Motor del Sniper Bot. Escanea bloques, detecta PairCreated,
       analiza con 5 APIs de seguridad (GoPlus, Honeypot.is, DexScreener,
       CoinGecko, TokenSniffer), ejecuta auto-buy/sell con TP/SL.
+      - Verificación estricta de contrato: open source obligatorio,
+        bloquea proxy, hidden owner, fake renounce, airdrop scam,
+        fake ERC-20, holder concentration (top≥30%, creator≥20%)
       - Enrichment dual: Fast ~3s (APIs fallidas) / Slow ~15s (DexScreener full)
       - Buy Gating: LP Lock ≥80% y ≥24h, anti-pump (5m≥+30%, 1h≥+50%),
         anti-dump (24h≤-50%, 6h≤-40%, 1h≤-25%), honeypot, tax limits
