@@ -348,7 +348,159 @@ def build_chain_registry() -> dict[int, ChainConfig]:
         ],
     )
 
+    # ─── Solana (via Wormhole-wrapped / Jupiter) ────────
+    # Solana uses a different model — not EVM.
+    # We represent it as a "chain" for the router to support
+    # token-bridging and aggregated swap via Jupiter API.
+    registry[900] = ChainConfig(
+        chain_id=900,  # virtual chain_id for Solana
+        name="Solana",
+        symbol="SOL",
+        rpc_urls=["https://api.mainnet-beta.solana.com"],
+        wss_urls=["wss://api.mainnet-beta.solana.com"],
+        wrapped_native="So11111111111111111111111111111111111111112",  # Wrapped SOL
+        explorer_url="https://solscan.io",
+        block_time=0.4,
+        max_gas_gwei=0.0,  # Solana uses lamports/compute units
+        default_gas_gwei=0.0,
+        is_poa=False,
+        dexes=[
+            DexConfig(
+                name="Jupiter V6", chain_id=900, version="jupiter",
+                factory_address="",  # N/A — Jupiter is an aggregator API
+                router_address="JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+                weth_address="So11111111111111111111111111111111111111112",
+                pair_created_topic="",  # No on-chain events — uses API
+                priority=1,
+                avg_gas_cost=5000,  # compute units
+                estimated_slippage_pct=0.3,
+            ),
+            DexConfig(
+                name="Raydium V4", chain_id=900, version="raydium",
+                factory_address="675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+                router_address="675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+                weth_address="So11111111111111111111111111111111111111112",
+                pair_created_topic="",
+                priority=2,
+                avg_gas_cost=5000,
+            ),
+            DexConfig(
+                name="Orca Whirlpool", chain_id=900, version="orca",
+                factory_address="whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+                router_address="whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+                weth_address="So11111111111111111111111111111111111111112",
+                pair_created_topic="",
+                priority=3,
+                avg_gas_cost=5000,
+            ),
+        ],
+    )
+
+    # ─── Avalanche C-Chain ───────────────────────────────
+    registry[43114] = ChainConfig(
+        chain_id=43114,
+        name="Avalanche C-Chain",
+        symbol="AVAX",
+        rpc_urls=["https://api.avax.network/ext/bc/C/rpc"],
+        wss_urls=[],
+        wrapped_native="0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+        explorer_url="https://snowtrace.io",
+        block_time=2.0,
+        max_gas_gwei=100.0,
+        default_gas_gwei=25.0,
+        is_poa=False,
+        dexes=[
+            DexConfig(
+                name="Trader Joe V2", chain_id=43114, version="v2",
+                factory_address="0x9Ad6C38BE94206cA50bb0d90783181834D79578e",
+                router_address="0x60aE616a2155Ee3d9A68541Ba4544862310933d4",
+                weth_address="0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+                pair_created_topic=PAIR_CREATED_TOPIC_V2,
+                priority=1,
+            ),
+            DexConfig(
+                name="Pangolin", chain_id=43114, version="v2",
+                factory_address="0xefa94DE7a4656D787667C749f7E1223D71E9FD88",
+                router_address="0xE54Ca86531e17Ef3616d22Ca28b0D458b6C89106",
+                weth_address="0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+                pair_created_topic=PAIR_CREATED_TOPIC_V2,
+                priority=2,
+            ),
+        ],
+    )
+
     return registry
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Solana Integration (Jupiter API)
+# ═══════════════════════════════════════════════════════════════════
+
+class SolanaRouter:
+    """
+    Solana swap routing via Jupiter Aggregator API.
+    Handles non-EVM chain as an API-based swap engine.
+    """
+
+    JUPITER_QUOTE_URL = "https://quote-api.jup.ag/v6/quote"
+    JUPITER_SWAP_URL = "https://quote-api.jup.ag/v6/swap"
+
+    def __init__(self):
+        self._session = None
+
+    async def _ensure_session(self):
+        try:
+            import aiohttp
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=15)
+                )
+        except ImportError:
+            pass
+
+    async def get_quote(self, input_mint: str, output_mint: str,
+                        amount_lamports: int, slippage_bps: int = 50) -> Optional[dict]:
+        """Get swap quote from Jupiter API."""
+        await self._ensure_session()
+        if not self._session:
+            return None
+
+        try:
+            params = {
+                "inputMint": input_mint,
+                "outputMint": output_mint,
+                "amount": str(amount_lamports),
+                "slippageBps": slippage_bps,
+            }
+            async with self._session.get(self.JUPITER_QUOTE_URL, params=params) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+        except Exception as e:
+            logger.debug(f"Jupiter quote error: {e}")
+        return None
+
+    async def build_swap_tx(self, quote: dict, user_pubkey: str) -> Optional[dict]:
+        """Build swap transaction from Jupiter quote."""
+        await self._ensure_session()
+        if not self._session or not quote:
+            return None
+
+        try:
+            payload = {
+                "quoteResponse": quote,
+                "userPublicKey": user_pubkey,
+                "wrapAndUnwrapSol": True,
+            }
+            async with self._session.post(self.JUPITER_SWAP_URL, json=payload) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+        except Exception as e:
+            logger.debug(f"Jupiter swap build error: {e}")
+        return None
+
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -385,10 +537,15 @@ class MultiDexRouter:
         factories = router.get_factories(56)  # for PairCreated listeners
     """
 
+    # Solana virtual chain ID
+    SOLANA_CHAIN_ID = 900
+
     def __init__(self):
         self._registry = build_chain_registry()
         self._web3_instances: dict[int, Web3] = {}  # chain_id → Web3
         self._active_chains: set[int] = set()
+        self._solana_router = SolanaRouter()
+        self._solana_pubkey: str = ""  # user's Solana public key
 
     def add_chain(self, chain_id: int, rpc_url: str = "", w3: Web3 = None):
         """
@@ -419,6 +576,15 @@ class MultiDexRouter:
 
         self._active_chains.add(chain_id)
         logger.info(f"MultiDex: activated {chain.name} (chain {chain_id})")
+
+    def set_solana_pubkey(self, pubkey: str):
+        """Set the Solana public key for Jupiter swaps."""
+        self._solana_pubkey = pubkey
+        logger.info(f"MultiDex: Solana pubkey set")
+
+    def is_solana_chain(self, chain_id: int) -> bool:
+        """Check if chain ID is the Solana virtual chain."""
+        return chain_id == self.SOLANA_CHAIN_ID
 
     def get_chain(self, chain_id: int) -> Optional[ChainConfig]:
         """Get chain configuration."""
@@ -486,7 +652,14 @@ class MultiDexRouter:
         """
         w3 = self._web3_instances.get(chain_id)
         chain = self._registry.get(chain_id)
-        if not w3 or not chain:
+        if not chain:
+            return None
+
+        # Solana uses Jupiter API — different flow
+        if chain_id == self.SOLANA_CHAIN_ID:
+            return await self._find_solana_route(chain, token_address, amount_native, direction)
+
+        if not w3:
             return None
 
         dexes = self.get_dexes(chain_id)
@@ -526,6 +699,47 @@ class MultiDexRouter:
             f"→ {best.dex_name} (out={best.amount_out / 1e18:.6f})"
         )
         return best
+
+    async def _find_solana_route(
+        self, chain: ChainConfig, token_address: str,
+        amount_native: float, direction: str
+    ) -> Optional[RouteResult]:
+        """Find best route on Solana via Jupiter API."""
+        wsol = chain.wrapped_native
+        amount_lamports = int(amount_native * 1e9)  # SOL has 9 decimals
+
+        if direction == "buy":
+            input_mint = wsol
+            output_mint = token_address
+        else:
+            input_mint = token_address
+            output_mint = wsol
+
+        quote = await self._solana_router.get_quote(
+            input_mint, output_mint, amount_lamports
+        )
+        if not quote:
+            return None
+
+        amount_out = int(quote.get("outAmount", 0))
+        route = RouteResult(
+            dex_name="Jupiter V6",
+            chain_id=self.SOLANA_CHAIN_ID,
+            router_address="JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+            path=[input_mint, output_mint],
+            amount_in=amount_lamports,
+            amount_out=amount_out,
+            price_impact_pct=float(quote.get("priceImpactPct", 0)),
+            gas_estimate=5000,
+            slippage_pct=float(quote.get("slippageBps", 50)) / 100,
+            score=amount_out,
+        )
+
+        logger.info(
+            f"MultiDex: Solana route via Jupiter — "
+            f"out={amount_out / 1e9:.6f} SOL-equivalent"
+        )
+        return route
 
     async def _quote_v2(
         self, w3: Web3, dex: DexConfig, token: str,

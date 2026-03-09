@@ -1,7 +1,7 @@
 """
 sniperService.py — Core sniper bot service.
 
-Architecture (Professional v5):
+Architecture (Professional v7):
   mempool listener → pre-launch detector → token detector → contract analyzer
   → swap simulator → pump analyzer → smart money tracker → dev tracker
   → risk engine → trade executor → rug detector → profit manager
@@ -9,6 +9,9 @@ Architecture (Professional v5):
   → proxy detector → stress tester → volatility slippage
   → ML predictor → social sentiment → dynamic contract scanner
   → whale activity tracker → anomaly detector
+  → MEV protector → multi-DEX router → copy trader → AI optimizer
+  → RL learner → orderflow analyzer → market simulator
+  → auto strategy → launch scanner → mempool v7 → whale graph
 
 Modules:
   pumpAnalyzer.py      — Advanced pump score engine v3 (0–100, 10 components)
@@ -23,11 +26,23 @@ Modules:
   resourceMonitor.py   — Memory/CPU/WS/RPC monitoring (v4)
   alertService.py      — Telegram/Discord/Email alerts (v4)
   metricsService.py    — Performance metrics & P&L tracking (v4)
-  mlPredictor.py       — ML pump/dump prediction + anomaly detection (NEW v5)
-  socialSentiment.py   — Multi-platform social sentiment analysis (NEW v5)
-  dynamicContractScanner.py — Continuous contract monitoring (NEW v5)
+  mlPredictor.py       — ML pump/dump prediction + anomaly detection (v5)
+  socialSentiment.py   — Multi-platform social sentiment analysis (v5)
+  dynamicContractScanner.py — Continuous contract monitoring (v5)
+  backtestEngine.py    — Historical backtesting engine (v6)
+  copyTrader.py        — Whale copy trading system (v6)
+  mevProtection.py     — MEV protection + v2 adaptive gas (v6)
+  multiDexRouter.py    — Multi-DEX routing + Solana/Avalanche (v6)
+  strategyOptimizer.py — AI strategy optimization (v6)
+  reinforcementLearner.py    — RL + Bayesian + bandit decision engine (NEW v7)
+  orderflowAnalyzer.py       — Orderflow analysis + bot/manipulation detection (NEW v7)
+  marketSimulator.py         — Full market simulation (AMM + MEV + MC) (NEW v7)
+  autoStrategyGenerator.py   — Genetic algorithm strategy evolution (NEW v7)
+  predictiveLaunchScanner.py — Pre-mempool contract detection (NEW v7)
+  mempoolAnalyzer.py         — Advanced mempool analysis (NEW v7)
+  whaleNetworkGraph.py       — Wallet network graph analysis (NEW v7)
 
-Uses web3.py to interact with BSC (or other EVM chains) via WebSocket RPC.
+Uses web3.py to interact with BSC (or other EVM chains + Solana) via WebSocket RPC.
 Runs as an async background task inside Django Channels.
 """
 
@@ -70,6 +85,14 @@ from trading.Services.copyTrader import CopyTrader
 from trading.Services.mevProtection import MEVProtector, MEVAnalysis
 from trading.Services.multiDexRouter import MultiDexRouter
 from trading.Services.strategyOptimizer import StrategyOptimizer, TradeOutcome
+# ── Professional v7 modules ──
+from trading.Services.reinforcementLearner import ReinforcementLearner
+from trading.Services.orderflowAnalyzer import OrderflowAnalyzer
+from trading.Services.marketSimulator import MarketSimulator
+from trading.Services.autoStrategyGenerator import AutoStrategyGenerator
+from trading.Services.predictiveLaunchScanner import PredictiveLaunchScanner
+from trading.Services.mempoolAnalyzer import MempoolAnalyzer
+from trading.Services.whaleNetworkGraph import WhaleNetworkGraph
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +416,50 @@ class TokenInfo:
     dev_ml_reputation: int = 50
     dev_ml_cluster: str = "neutral"
     dev_ml_confidence: float = 0.0
+    # ── v7: Reinforcement Learning ──
+    rl_decision: str = "hold"              # buy / sell / hold
+    rl_confidence: float = 0.0             # 0-1
+    rl_action: str = ""                    # Q-learning action name
+    rl_suggested_tp: float = 0.0
+    rl_suggested_sl: float = 0.0
+    rl_suggested_amount: float = 0.0
+    _rl_ok: bool = False
+    # ── v7: Orderflow Analysis ──
+    orderflow_organic_score: float = 0.0    # 0-100
+    orderflow_bot_pct: float = 0.0          # 0-100%
+    orderflow_manipulation_risk: float = 0.0  # 0-1
+    orderflow_patterns: list = field(default_factory=list)
+    _orderflow_ok: bool = False
+    # ── v7: Market Simulator ──
+    sim_v7_risk_score: float = 0.0          # 0-100 overall sim risk
+    sim_v7_recommendation: str = "unknown"  # buy / avoid / wait
+    sim_v7_slippage_pct: float = 0.0
+    sim_v7_mev_vulnerable: bool = False
+    sim_v7_expected_pnl: float = 0.0
+    _sim_v7_ok: bool = False
+    # ── v7: Auto Strategy Generator ──
+    strategy_decision: str = "none"         # buy / pass / watch
+    strategy_confidence: float = 0.0        # 0-1
+    strategy_name: str = ""                 # name of best matching strategy
+    _strategy_ok: bool = False
+    # ── v7: Predictive Launch Scanner ──
+    launch_risk_score: int = 50
+    launch_stage: str = "unknown"
+    launch_snipe_priority: int = 0          # 0-100
+    _launch_ok: bool = False
+    # ── v7: Mempool Analyzer ──
+    mempool_v7_net_pressure: float = 0.0    # positive=buying, negative=selling
+    mempool_v7_frontrun_risk: float = 0.0   # 0-1
+    mempool_v7_pending_buys: int = 0
+    mempool_v7_pending_sells: int = 0
+    mempool_v7_alerts: list = field(default_factory=list)
+    _mempool_v7_ok: bool = False
+    # ── v7: Whale Network Graph ──
+    whale_network_coordination: float = 0.0   # 0-1
+    whale_network_sybil_risk: float = 0.0     # 0-1
+    whale_smart_money_sentiment: str = "neutral"  # bullish / bearish / neutral
+    whale_network_clusters: int = 0
+    _whale_network_ok: bool = False
     # Overall
     risk: str = "unknown"
     risk_reasons: list = field(default_factory=list)
@@ -1155,6 +1222,18 @@ class SniperBot:
             "mev_auto_protect": False,              # auto-apply MEV protection to all trades
             "copy_trade_max_amount": 0.1,           # max BNB/ETH per copy trade
             "copy_trade_auto_follow": True,         # auto-follow smart money wallets
+            # ── v7 Professional modules (toggles) ──
+            "enable_rl_learner": True,              # reinforcement learning decisions
+            "enable_orderflow": True,               # orderflow analysis
+            "enable_market_simulator": True,        # advanced market simulation
+            "enable_auto_strategy": True,           # auto-generated strategies
+            "enable_launch_scanner": True,          # predictive launch scanner
+            "enable_mempool_v7": True,              # advanced mempool analyzer
+            "enable_whale_graph": True,             # whale network graph
+            "rl_min_confidence": 0.3,               # min RL confidence to act
+            "orderflow_max_manipulation": 0.7,      # max manipulation risk to buy
+            "sim_v7_max_risk": 70,                  # max simulator risk score
+            "launch_min_priority": 40,              # min launch snipe priority
         }
 
         # State
@@ -1244,6 +1323,17 @@ class SniperBot:
             self.copy_trader.set_trade_executor(self.trade_executor)
         self.copy_trader.set_smart_money_tracker(self.smart_money)
         self.multi_dex_router.add_chain(chain_id, w3=self.w3)
+
+        # ── Professional v7 modules ──
+        self.rl_learner = ReinforcementLearner()
+        self.orderflow_analyzer = OrderflowAnalyzer(self.w3, chain_id)
+        self.market_simulator = MarketSimulator(self.w3, chain_id)
+        self.auto_strategy = AutoStrategyGenerator()
+        self.launch_scanner = PredictiveLaunchScanner(self.w3, chain_id)
+        self.mempool_analyzer_v7 = MempoolAnalyzer(self.w3, chain_id)
+        self.whale_graph = WhaleNetworkGraph(self.w3, chain_id)
+        self._launch_scanner_task: asyncio.Task | None = None
+        self._mempool_v7_task: asyncio.Task | None = None
 
         # Background task handles for professional modules
         self._mempool_task: asyncio.Task | None = None
@@ -2208,6 +2298,190 @@ class SniperBot:
         except Exception as e:
             logger.error(f"v6 analysis pipeline error for {token_info.symbol}: {e}")
 
+        # ═══════════════════════════════════════════════════════
+        #  v7 Analysis Pipeline — RL, Orderflow, Simulator,
+        #  Strategy, Launch Scanner, Mempool v7, Whale Graph
+        # ═══════════════════════════════════════════════════════
+        try:
+            v7_tasks = []
+
+            # v7: Reinforcement Learning decision
+            if self.settings.get("enable_rl_learner", True):
+                async def _rl_analyze():
+                    try:
+                        market_data = {
+                            "pump_score": token_info.pump_score,
+                            "risk_engine_score": token_info.risk_engine_score,
+                            "ml_pump_score": token_info.ml_pump_score,
+                            "social_sentiment": token_info.social_sentiment_score,
+                            "volatility": token_info.volatility_score,
+                            "whale_risk": token_info.whale_risk_score,
+                            "mev_frontrun_risk": token_info.mev_frontrun_risk,
+                            "lp_lock_percent": token_info.lp_lock_percent,
+                            "buy_tax": token_info.buy_tax,
+                            "sell_tax": token_info.sell_tax,
+                        }
+                        return "rl", self.rl_learner.decide(token_info, market_data)
+                    except Exception as e:
+                        logger.debug(f"RL analysis failed for {token_info.symbol}: {e}")
+                        return "rl", None
+                v7_tasks.append(_rl_analyze())
+
+            # v7: Orderflow analysis
+            if self.settings.get("enable_orderflow", True):
+                async def _orderflow_analyze():
+                    try:
+                        return "orderflow", await self.orderflow_analyzer.analyze(new_token, pair_address)
+                    except Exception as e:
+                        logger.debug(f"Orderflow analysis failed for {token_info.symbol}: {e}")
+                        return "orderflow", None
+                v7_tasks.append(_orderflow_analyze())
+
+            # v7: Market simulation
+            if self.settings.get("enable_market_simulator", True):
+                async def _sim_analyze():
+                    try:
+                        buy_amount = self.settings.get("buy_amount_native", 0.05)
+                        tp = self.settings.get("take_profit", 50)
+                        sl = self.settings.get("stop_loss", 20)
+                        hold_h = self.settings.get("max_hold_hours", 24) or 24
+                        mev_risk = token_info.mev_frontrun_risk
+                        return "sim", await self.market_simulator.simulate(
+                            new_token, pair_address, buy_amount, tp, sl, hold_h, mev_risk
+                        )
+                    except Exception as e:
+                        logger.debug(f"Market simulation failed for {token_info.symbol}: {e}")
+                        return "sim", None
+                v7_tasks.append(_sim_analyze())
+
+            # v7: Auto strategy evaluation
+            if self.settings.get("enable_auto_strategy", True):
+                async def _strategy_analyze():
+                    try:
+                        return "strategy", self.auto_strategy.evaluate_token(token_info)
+                    except Exception as e:
+                        logger.debug(f"Strategy evaluation failed for {token_info.symbol}: {e}")
+                        return "strategy", None
+                v7_tasks.append(_strategy_analyze())
+
+            # v7: Launch scanner analysis
+            if self.settings.get("enable_launch_scanner", True):
+                async def _launch_analyze():
+                    try:
+                        return "launch", await self.launch_scanner.scan_token(new_token)
+                    except Exception as e:
+                        logger.debug(f"Launch scanner failed for {token_info.symbol}: {e}")
+                        return "launch", None
+                v7_tasks.append(_launch_analyze())
+
+            # v7: Mempool v7 analysis
+            if self.settings.get("enable_mempool_v7", True):
+                async def _mempool_v7_analyze():
+                    try:
+                        return "mempool_v7", await self.mempool_analyzer_v7.analyze_token(new_token)
+                    except Exception as e:
+                        logger.debug(f"Mempool v7 analysis failed for {token_info.symbol}: {e}")
+                        return "mempool_v7", None
+                v7_tasks.append(_mempool_v7_analyze())
+
+            # v7: Whale network graph
+            if self.settings.get("enable_whale_graph", True):
+                async def _whale_graph_analyze():
+                    try:
+                        trades = []
+                        if token_info._whale_ok and token_info.whale_signals:
+                            for sig in token_info.whale_signals[:20]:
+                                if isinstance(sig, dict):
+                                    trades.append(sig)
+                        return "whale_graph", await self.whale_graph.analyze_token(new_token, trades)
+                    except Exception as e:
+                        logger.debug(f"Whale graph analysis failed for {token_info.symbol}: {e}")
+                        return "whale_graph", None
+                v7_tasks.append(_whale_graph_analyze())
+
+            # Execute all v7 analyses in parallel
+            if v7_tasks:
+                v7_results = await asyncio.gather(*v7_tasks, return_exceptions=True)
+                for result in v7_results:
+                    if isinstance(result, Exception):
+                        logger.debug(f"v7 task exception: {result}")
+                        continue
+                    label, data = result
+                    if data is None:
+                        continue
+
+                    if label == "rl":
+                        token_info.rl_decision = data.action.value if hasattr(data.action, 'value') else str(data.action)
+                        token_info.rl_confidence = data.confidence
+                        token_info.rl_action = data.reasoning if hasattr(data, 'reasoning') else ""
+                        token_info.rl_suggested_tp = data.suggested_tp if hasattr(data, 'suggested_tp') else 0
+                        token_info.rl_suggested_sl = data.suggested_sl if hasattr(data, 'suggested_sl') else 0
+                        token_info.rl_suggested_amount = data.suggested_amount if hasattr(data, 'suggested_amount') else 0
+                        token_info._rl_ok = True
+
+                    elif label == "orderflow":
+                        token_info.orderflow_organic_score = data.organic_score if hasattr(data, 'organic_score') else 0
+                        token_info.orderflow_bot_pct = data.bot_percentage if hasattr(data, 'bot_percentage') else 0
+                        token_info.orderflow_manipulation_risk = data.manipulation_risk if hasattr(data, 'manipulation_risk') else 0
+                        token_info.orderflow_patterns = data.detected_patterns if hasattr(data, 'detected_patterns') else []
+                        token_info._orderflow_ok = True
+
+                    elif label == "sim":
+                        token_info.sim_v7_risk_score = data.risk_score if hasattr(data, 'risk_score') else 0
+                        token_info.sim_v7_recommendation = data.recommendation if hasattr(data, 'recommendation') else "unknown"
+                        token_info.sim_v7_slippage_pct = data.slippage.actual_slippage_pct if hasattr(data, 'slippage') and data.slippage else 0
+                        token_info.sim_v7_mev_vulnerable = data.mev_sim.is_vulnerable if hasattr(data, 'mev_sim') and data.mev_sim else False
+                        token_info.sim_v7_expected_pnl = data.monte_carlo.expected_pnl_pct if hasattr(data, 'monte_carlo') and data.monte_carlo else 0
+                        token_info._sim_v7_ok = True
+
+                    elif label == "strategy":
+                        if isinstance(data, dict):
+                            token_info.strategy_decision = data.get("decision", "none")
+                            token_info.strategy_confidence = data.get("confidence", 0)
+                            token_info.strategy_name = data.get("strategy_name", "")
+                            token_info._strategy_ok = True
+
+                    elif label == "launch":
+                        if isinstance(data, dict):
+                            token_info.launch_risk_score = data.get("risk_score", 50)
+                            token_info.launch_stage = data.get("stage", "unknown")
+                            token_info.launch_snipe_priority = data.get("snipe_priority", 0)
+                            token_info._launch_ok = True
+
+                    elif label == "mempool_v7":
+                        if isinstance(data, dict):
+                            token_info.mempool_v7_net_pressure = data.get("net_pressure", 0)
+                            token_info.mempool_v7_frontrun_risk = data.get("frontrun_risk", 0)
+                            token_info.mempool_v7_pending_buys = data.get("pending_buys", 0)
+                            token_info.mempool_v7_pending_sells = data.get("pending_sells", 0)
+                            token_info.mempool_v7_alerts = data.get("alerts", [])
+                            token_info._mempool_v7_ok = True
+
+                    elif label == "whale_graph":
+                        if isinstance(data, dict):
+                            token_info.whale_network_coordination = data.get("coordination_score", 0)
+                            token_info.whale_network_sybil_risk = data.get("sybil_risk", 0)
+                            token_info.whale_smart_money_sentiment = data.get("smart_money_sentiment", "neutral")
+                            token_info.whale_network_clusters = data.get("cluster_count", 0)
+                            token_info._whale_network_ok = True
+
+            # Re-emit with v7 data
+            await self._emit("token_detected",
+                self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
+            )
+            logger.info(
+                f"v7 analysis for {token_info.symbol}: "
+                f"rl={token_info.rl_decision}({token_info.rl_confidence:.2f}) "
+                f"orderflow_organic={token_info.orderflow_organic_score:.0f} "
+                f"sim_risk={token_info.sim_v7_risk_score:.0f} "
+                f"strategy={token_info.strategy_decision} "
+                f"launch_priority={token_info.launch_snipe_priority} "
+                f"mempool_pressure={token_info.mempool_v7_net_pressure:.2f} "
+                f"whale_sybil={token_info.whale_network_sybil_risk:.2f}"
+            )
+        except Exception as e:
+            logger.error(f"v7 analysis pipeline error for {token_info.symbol}: {e}")
+
         # Check if safe enough
         passes_safety = True
         if self.settings["only_safe"] and token_info.risk == "danger":
@@ -2382,6 +2656,43 @@ class SniperBot:
         # Multi-DEX gate — warn if no route found (but don't block)
         if self.settings.get("enable_multi_dex", True) and not token_info._multi_dex_ok:
             logger.debug(f"⚠️ {token_info.symbol}: no multi-DEX route found, using default router")
+
+        # ── Professional v7 safety gates ──
+        # RL learner gate — block if RL says sell with high confidence
+        if token_info._rl_ok and self.settings.get("enable_rl_learner", True):
+            rl_min_conf = self.settings.get("rl_min_confidence", 0.3)
+            if token_info.rl_decision == "sell" and token_info.rl_confidence >= rl_min_conf:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: RL agent says SELL (confidence={token_info.rl_confidence:.2f})")
+
+        # Orderflow manipulation gate
+        if token_info._orderflow_ok and self.settings.get("enable_orderflow", True):
+            max_manip = self.settings.get("orderflow_max_manipulation", 0.7)
+            if token_info.orderflow_manipulation_risk >= max_manip:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: orderflow manipulation risk {token_info.orderflow_manipulation_risk:.2f} >= {max_manip}")
+
+        # Market simulator risk gate
+        if token_info._sim_v7_ok and self.settings.get("enable_market_simulator", True):
+            max_sim_risk = self.settings.get("sim_v7_max_risk", 70)
+            if token_info.sim_v7_risk_score >= max_sim_risk:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: simulation risk {token_info.sim_v7_risk_score:.0f} >= {max_sim_risk}")
+            if token_info.sim_v7_recommendation == "avoid":
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: simulator recommends AVOID")
+
+        # Whale network sybil gate — block if high sybil risk
+        if token_info._whale_network_ok and self.settings.get("enable_whale_graph", True):
+            if token_info.whale_network_sybil_risk >= 0.7:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: sybil network risk {token_info.whale_network_sybil_risk:.2f}")
+
+        # Mempool v7 frontrun gate
+        if token_info._mempool_v7_ok and self.settings.get("enable_mempool_v7", True):
+            if token_info.mempool_v7_frontrun_risk >= 0.8:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: mempool frontrun risk {token_info.mempool_v7_frontrun_risk:.2f}")
 
         if passes_safety:
             # Auto-calculate max_hold from LP lock duration (sell 1h before expiry)
@@ -2916,6 +3227,35 @@ class SniperBot:
         if v6_modules:
             await self._emit("scan_info", {"message": f"🚀 v6 modules: {', '.join(v6_modules)}"})
 
+        # ── Professional v7: module startup ──
+        v7_modules = []
+        if self.settings.get("enable_rl_learner", True):
+            v7_modules.append("RL-Learner")
+        if self.settings.get("enable_orderflow", True):
+            v7_modules.append("Orderflow")
+        if self.settings.get("enable_market_simulator", True):
+            v7_modules.append("MarketSimulator")
+        if self.settings.get("enable_auto_strategy", True):
+            v7_modules.append("AutoStrategy")
+        if self.settings.get("enable_launch_scanner", True):
+            try:
+                self._launch_scanner_task = asyncio.ensure_future(self.launch_scanner.start())
+                v7_modules.append("LaunchScanner(bg)")
+            except Exception as e:
+                logger.debug(f"Launch scanner startup failed: {e}")
+                v7_modules.append("LaunchScanner(err)")
+        if self.settings.get("enable_mempool_v7", True):
+            try:
+                self._mempool_v7_task = asyncio.ensure_future(self.mempool_analyzer_v7.start())
+                v7_modules.append("MempoolV7(bg)")
+            except Exception as e:
+                logger.debug(f"Mempool v7 startup failed: {e}")
+                v7_modules.append("MempoolV7(err)")
+        if self.settings.get("enable_whale_graph", True):
+            v7_modules.append("WhaleGraph")
+        if v7_modules:
+            await self._emit("scan_info", {"message": f"🧬 v7 modules: {', '.join(v7_modules)}"})
+
         price_tick = 0
         enrich_tick = 0           # Fast enrichment cycle (every ~3s)
         slow_tick = 0              # Full refresh cycle (every ~15s)
@@ -3202,6 +3542,22 @@ class SniperBot:
                 pass
         if hasattr(self, '_copy_trader_task') and self._copy_trader_task:
             self._copy_trader_task.cancel()
+        # v7: stop launch scanner
+        if hasattr(self, 'launch_scanner'):
+            try:
+                asyncio.ensure_future(self.launch_scanner.stop())
+            except RuntimeError:
+                pass
+        if hasattr(self, '_launch_scanner_task') and self._launch_scanner_task:
+            self._launch_scanner_task.cancel()
+        # v7: stop mempool analyzer v7
+        if hasattr(self, 'mempool_analyzer_v7'):
+            try:
+                asyncio.ensure_future(self.mempool_analyzer_v7.stop())
+            except RuntimeError:
+                pass
+        if hasattr(self, '_mempool_v7_task') and self._mempool_v7_task:
+            self._mempool_v7_task.cancel()
 
     def update_settings(self, new_settings: dict):
         """Update bot settings from frontend."""
@@ -3295,6 +3651,24 @@ class SniperBot:
                 state["copy_trader_stats"] = self.copy_trader.get_stats() if hasattr(self.copy_trader, 'get_stats') else {}
             if hasattr(self, 'backtest_engine') and self.backtest_engine:
                 state["backtest_stats"] = {"available": True}
+        except Exception:
+            pass
+        # v7 module stats
+        try:
+            if hasattr(self, 'rl_learner') and self.rl_learner:
+                state["rl_learner_stats"] = self.rl_learner.get_stats()
+            if hasattr(self, 'orderflow_analyzer') and self.orderflow_analyzer:
+                state["orderflow_stats"] = self.orderflow_analyzer.get_stats()
+            if hasattr(self, 'market_simulator') and self.market_simulator:
+                state["market_simulator_stats"] = self.market_simulator.get_stats()
+            if hasattr(self, 'auto_strategy') and self.auto_strategy:
+                state["auto_strategy_stats"] = self.auto_strategy.get_stats()
+            if hasattr(self, 'launch_scanner') and self.launch_scanner:
+                state["launch_scanner_stats"] = self.launch_scanner.get_stats()
+            if hasattr(self, 'mempool_analyzer_v7') and self.mempool_analyzer_v7:
+                state["mempool_v7_stats"] = self.mempool_analyzer_v7.get_stats()
+            if hasattr(self, 'whale_graph') and self.whale_graph:
+                state["whale_graph_stats"] = self.whale_graph.get_stats()
         except Exception:
             pass
         return state

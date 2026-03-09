@@ -725,3 +725,151 @@ class MEVProtector:
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
+
+    # ───────────────────────────────────────────────────────
+    #  V2: Adaptive Gas Optimization
+    # ───────────────────────────────────────────────────────
+
+    async def adaptive_gas_optimize(self, raw_tx: dict, target_token: str = "",
+                                     urgency: str = "normal") -> dict:
+        """
+        V2 adaptive gas optimization.
+
+        Analyzes current network conditions and pending transactions
+        to determine the optimal gas price for inclusion without
+        overpaying or being frontrun.
+
+        Args:
+            raw_tx: unsigned transaction dict
+            target_token: token address for mempool analysis
+            urgency: "low" | "normal" | "high" | "critical"
+
+        Returns:
+            Modified transaction dict with optimized gas.
+        """
+        optimized_tx = raw_tx.copy()
+        try:
+            loop = asyncio.get_event_loop()
+            # 1. Get current gas price
+            gas_price = await loop.run_in_executor(
+                None, lambda: self.w3.eth.gas_price
+            )
+            current_gwei = gas_price / 1e9
+
+            # 2. Analyze pending block gas prices
+            pending_gas_stats = await self._analyze_pending_gas()
+
+            # 3. Compute optimal gas based on urgency
+            if urgency == "critical":
+                # Must be included next block — use p95 + 20%
+                optimal_gwei = pending_gas_stats.get("p95", current_gwei) * 1.2
+            elif urgency == "high":
+                # High priority — above p75
+                optimal_gwei = pending_gas_stats.get("p75", current_gwei) * 1.1
+            elif urgency == "normal":
+                # Standard — slightly above median
+                optimal_gwei = pending_gas_stats.get("median", current_gwei) * 1.05
+            else:  # low
+                # Cost optimization — at p25
+                optimal_gwei = pending_gas_stats.get("p25", current_gwei * 0.9)
+
+            # 4. If target token specified, check for competing bots
+            if target_token:
+                bot_gas = await self._get_competing_bot_gas(target_token)
+                if bot_gas and urgency in ("high", "critical"):
+                    # Must beat the bots
+                    optimal_gwei = max(optimal_gwei, bot_gas * 1.05)
+
+            # 5. Apply ceiling
+            max_gwei = self.config.gas_boost_max_gwei
+            optimal_gwei = min(optimal_gwei, max_gwei)
+            optimal_wei = int(optimal_gwei * 1e9)
+
+            # 6. Apply to transaction
+            if "maxFeePerGas" in raw_tx:
+                optimized_tx["maxFeePerGas"] = optimal_wei
+                optimized_tx["maxPriorityFeePerGas"] = int(optimal_wei * 0.4)
+            else:
+                optimized_tx["gasPrice"] = optimal_wei
+
+            logger.info(
+                f"MEV v2: adaptive gas — {current_gwei:.1f} → {optimal_gwei:.1f} Gwei "
+                f"(urgency={urgency})"
+            )
+            self.stats["adaptive_gas_optimizations"] = self.stats.get(
+                "adaptive_gas_optimizations", 0
+            ) + 1
+
+        except Exception as e:
+            logger.debug(f"Adaptive gas optimization error: {e}")
+
+        return optimized_tx
+
+    async def _analyze_pending_gas(self) -> dict:
+        """Analyze gas prices of transactions in pending block."""
+        stats = {"median": 5, "p25": 3, "p75": 7, "p95": 15}
+        try:
+            loop = asyncio.get_event_loop()
+            pending = await loop.run_in_executor(
+                None, lambda: self.w3.eth.get_block("pending", full_transactions=True)
+            )
+            if not pending:
+                return stats
+
+            gas_prices = []
+            for tx in pending.get("transactions", []):
+                gp = int(tx.get("gasPrice", 0)) / 1e9
+                if gp > 0:
+                    gas_prices.append(gp)
+
+            if not gas_prices:
+                return stats
+
+            gas_prices.sort()
+            n = len(gas_prices)
+            stats["median"] = gas_prices[n // 2]
+            stats["p25"] = gas_prices[n // 4] if n >= 4 else gas_prices[0]
+            stats["p75"] = gas_prices[int(n * 0.75)] if n >= 4 else gas_prices[-1]
+            stats["p95"] = gas_prices[int(n * 0.95)] if n >= 20 else gas_prices[-1]
+
+        except Exception as e:
+            logger.debug(f"Pending gas analysis error: {e}")
+
+        return stats
+
+    async def _get_competing_bot_gas(self, token_address: str) -> Optional[float]:
+        """Get the max gas price of competing bots targeting a token."""
+        try:
+            pending_swaps = await self._get_pending_swaps(token_address)
+            bot_gas_prices = []
+            for ptx in pending_swaps:
+                from_addr = ptx.get("from", "")
+                gp = int(ptx.get("gasPrice", 0)) / 1e9
+                if from_addr in self.KNOWN_MEV_BOTS and gp > 0:
+                    bot_gas_prices.append(gp)
+            if bot_gas_prices:
+                return max(bot_gas_prices)
+        except Exception:
+            pass
+        return None
+
+    async def protect_with_adaptive_gas(self, raw_tx: dict, token_address: str = "",
+                                         urgency: str = "normal") -> ProtectedTx:
+        """
+        V2 combined protection: strategy selection + adaptive gas optimization.
+        Full MEV protection pipeline in a single call.
+        """
+        # 1. Analyze threat
+        amount_native = raw_tx.get("value", 0) / 1e18
+        analysis = await self.analyze_threat(token_address, amount_native)
+
+        # 2. Apply strategy-based protection
+        protected = await self.protect_transaction(raw_tx, analysis)
+
+        # 3. Adaptive gas on top of strategy protection
+        if protected.success:
+            protected.protected_tx = await self.adaptive_gas_optimize(
+                protected.protected_tx, token_address, urgency
+            )
+
+        return protected

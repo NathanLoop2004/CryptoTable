@@ -2815,3 +2815,41 @@ body.resizing-col *, body.resizing-row * {
 /* Pipeline MEV step */
 #pipe-mev .pipe-icon { font-size: 1rem; }
 #pipe-mev.active { border-color: var(--accent); background: rgba(240,185,11,0.06); }
+
+/* ═══════════════════════════════════════════════
+   v7 Module Styles
+   ═══════════════════════════════════════════════ */
+.v7-status-row {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+}
+.v7-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 12px;
+    background: rgba(162,89,255,0.08); color: #888;
+    font-size: .72rem; font-weight: 600;
+    border: 1px solid rgba(162,89,255,0.12);
+    transition: all .2s;
+}
+.v7-chip.active {
+    background: rgba(162,89,255,0.18); color: #a259ff;
+    border-color: rgba(162,89,255,0.35);
+}
+.v7-chip.danger {
+    background: rgba(246,70,93,0.15); color: #f6465d;
+    border-color: rgba(246,70,93,0.3);
+}
+/* v7 badges for token cards */
+.v7-badge {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: .68rem; font-weight: 600;
+}
+.v7-badge.rl-buy { background: rgba(14,203,129,0.15); color: #0ecb81; }
+.v7-badge.rl-sell { background: rgba(246,70,93,0.15); color: #f6465d; }
+.v7-badge.rl-hold { background: rgba(240,185,11,0.15); color: #f0b90b; }
+.v7-badge.orderflow { background: rgba(30,150,255,0.12); color: #1e96ff; }
+.v7-badge.sim { background: rgba(162,89,255,0.12); color: #a259ff; }
+.v7-badge.strategy { background: rgba(14,203,129,0.12); color: #0ecb81; }
+.v7-badge.launch { background: rgba(255,165,0,0.12); color: #ffa500; }
+.v7-badge.mempool { background: rgba(30,150,255,0.12); color: #1e96ff; }
+.v7-badge.whale-graph { background: rgba(162,89,255,0.12); color: #a259ff; }

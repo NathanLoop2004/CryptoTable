@@ -562,6 +562,59 @@
       <div>Wallet: <strong>${data.copy_trade_wallet||'—'}</strong></div>
       <div>Confidence: ${((data.copy_trade_confidence||0)*100).toFixed(0)}%</div>
     </div>` : ''}
+    ${data.rl_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🧠 RL Learner (v7)</div>
+      <div>Decision: <strong style="color:${data.rl_decision==='buy'?'#02c076':data.rl_decision==='sell'?'#e74c3c':'#f0b90b'}">${(data.rl_decision||'hold').toUpperCase()}</strong></div>
+      <div>Confidence: ${((data.rl_confidence||0)*100).toFixed(0)}%</div>
+      ${data.rl_suggested_tp ? `<div>RL TP: <strong style="color:#02c076">${data.rl_suggested_tp}%</strong></div>` : ''}
+      ${data.rl_suggested_sl ? `<div>RL SL: <strong style="color:#e74c3c">${data.rl_suggested_sl}%</strong></div>` : ''}
+    </div>` : ''}
+    ${data.orderflow_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">📊 Orderflow (v7)</div>
+      <div>Organic: <strong style="color:${data.orderflow_organic_score>=60?'#02c076':data.orderflow_organic_score>=30?'#f0b90b':'#e74c3c'}">${(data.orderflow_organic_score||0).toFixed(0)}/100</strong></div>
+      <div>Bot %: <strong style="color:${data.orderflow_bot_pct<=20?'#02c076':data.orderflow_bot_pct<=50?'#f0b90b':'#e74c3c'}">${(data.orderflow_bot_pct||0).toFixed(1)}%</strong></div>
+      <div>Manipulation: <strong style="color:${data.orderflow_manipulation_risk<=0.3?'#02c076':data.orderflow_manipulation_risk<=0.6?'#f0b90b':'#e74c3c'}">${((data.orderflow_manipulation_risk||0)*100).toFixed(0)}%</strong></div>
+    </div>` : ''}
+    ${data.sim_v7_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🎰 Market Simulator (v7)</div>
+      <div>Risk: <strong style="color:${data.sim_v7_risk_score<=30?'#02c076':data.sim_v7_risk_score<=60?'#f0b90b':'#e74c3c'}">${(data.sim_v7_risk_score||0).toFixed(0)}/100</strong></div>
+      <div>Recommend: <strong style="color:${data.sim_v7_recommendation==='buy'?'#02c076':data.sim_v7_recommendation==='avoid'?'#e74c3c':'#f0b90b'}">${(data.sim_v7_recommendation||'—').toUpperCase()}</strong></div>
+      <div>Slippage: ${(data.sim_v7_slippage_pct||0).toFixed(2)}%</div>
+      ${data.sim_v7_mev_vulnerable ? '<div style="color:#e74c3c;font-weight:700">⚠️ MEV Vulnerable</div>' : ''}
+      <div>Expected P&L: <strong style="color:${data.sim_v7_expected_pnl>=0?'#02c076':'#e74c3c'}">${data.sim_v7_expected_pnl>=0?'+':''}${(data.sim_v7_expected_pnl||0).toFixed(1)}%</strong></div>
+    </div>` : ''}
+    ${data.strategy_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🧬 Auto Strategy (v7)</div>
+      <div>Decision: <strong style="color:${data.strategy_decision==='buy'?'#02c076':data.strategy_decision==='pass'?'#e74c3c':'#f0b90b'}">${(data.strategy_decision||'none').toUpperCase()}</strong></div>
+      <div>Confidence: ${((data.strategy_confidence||0)*100).toFixed(0)}%</div>
+      ${data.strategy_name ? `<div>Strategy: <strong>${data.strategy_name}</strong></div>` : ''}
+    </div>` : ''}
+    ${data.launch_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🔮 Launch Scanner (v7)</div>
+      <div>Stage: <strong>${(data.launch_stage||'unknown').toUpperCase()}</strong></div>
+      <div>Risk: <strong style="color:${data.launch_risk_score<=30?'#02c076':data.launch_risk_score<=60?'#f0b90b':'#e74c3c'}">${data.launch_risk_score||50}/100</strong></div>
+      <div>Priority: <strong style="color:${data.launch_snipe_priority>=60?'#02c076':data.launch_snipe_priority>=30?'#f0b90b':'#e74c3c'}">${data.launch_snipe_priority||0}/100</strong></div>
+    </div>` : ''}
+    ${data.mempool_v7_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">📡 Mempool v7</div>
+      <div>Pressure: <strong style="color:${data.mempool_v7_net_pressure>=0?'#02c076':'#e74c3c'}">${data.mempool_v7_net_pressure>=0?'+':''}${(data.mempool_v7_net_pressure||0).toFixed(2)}</strong></div>
+      <div>Frontrun Risk: <strong style="color:${data.mempool_v7_frontrun_risk<=0.3?'#02c076':data.mempool_v7_frontrun_risk<=0.6?'#f0b90b':'#e74c3c'}">${((data.mempool_v7_frontrun_risk||0)*100).toFixed(0)}%</strong></div>
+      <div>Pending: 🟢${data.mempool_v7_pending_buys||0} buys / 🔴${data.mempool_v7_pending_sells||0} sells</div>
+    </div>` : ''}
+    ${data.whale_network_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🕸️ Whale Network (v7)</div>
+      <div>Coordination: <strong style="color:${data.whale_network_coordination<=0.3?'#02c076':data.whale_network_coordination<=0.6?'#f0b90b':'#e74c3c'}">${((data.whale_network_coordination||0)*100).toFixed(0)}%</strong></div>
+      <div>Sybil Risk: <strong style="color:${data.whale_network_sybil_risk<=0.3?'#02c076':data.whale_network_sybil_risk<=0.6?'#f0b90b':'#e74c3c'}">${((data.whale_network_sybil_risk||0)*100).toFixed(0)}%</strong></div>
+      <div>Smart Money: <strong style="color:${data.whale_smart_money_sentiment==='bullish'?'#02c076':data.whale_smart_money_sentiment==='bearish'?'#e74c3c':'#f0b90b'}">${(data.whale_smart_money_sentiment||'neutral').toUpperCase()}</strong></div>
+      <div>Clusters: ${data.whale_network_clusters||0}</div>
+    </div>` : ''}
   </div>
   <div class="tlc-reasons">
     <div class="tlc-title">🚩 Risk Reasons</div>
@@ -1249,6 +1302,46 @@
                 mevChip.classList.add("active");
             }
         }
+
+        // v7: sync module status chips
+        if (state.rl_learner_stats) {
+            const chip = document.getElementById("v7-rl-chip");
+            if (chip) { chip.querySelector("span").textContent = "ON"; chip.classList.add("active"); }
+        }
+        if (state.orderflow_stats) {
+            const chip = document.getElementById("v7-orderflow-chip");
+            if (chip) { chip.querySelector("span").textContent = state.orderflow_stats.total_analyses || 0; chip.classList.add("active"); }
+        }
+        if (state.market_simulator_stats) {
+            const chip = document.getElementById("v7-sim-chip");
+            if (chip) { chip.querySelector("span").textContent = state.market_simulator_stats.total_simulations || 0; chip.classList.add("active"); }
+        }
+        if (state.auto_strategy_stats) {
+            const chip = document.getElementById("v7-strategy-chip");
+            if (chip) { chip.querySelector("span").textContent = state.auto_strategy_stats.total_strategies || 0; chip.classList.add("active"); }
+        }
+        if (state.launch_scanner_stats) {
+            const chip = document.getElementById("v7-launch-chip");
+            if (chip) {
+                const pending = state.launch_scanner_stats.pending_launches || 0;
+                chip.querySelector("span").textContent = pending > 0 ? pending : "ON";
+                chip.classList.add("active");
+            }
+        }
+        if (state.mempool_v7_stats) {
+            const chip = document.getElementById("v7-mempool-chip");
+            if (chip) {
+                chip.querySelector("span").textContent = state.mempool_v7_stats.total_alerts || 0;
+                chip.classList.add("active");
+            }
+        }
+        if (state.whale_graph_stats) {
+            const chip = document.getElementById("v7-whale-chip");
+            if (chip) {
+                chip.querySelector("span").textContent = state.whale_graph_stats.total_wallets || 0;
+                chip.classList.add("active");
+            }
+        }
     }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -1897,6 +1990,14 @@
             enable_multi_dex:      document.getElementById("set-multi-dex")?.checked ?? true,
             enable_ai_optimizer:   document.getElementById("set-ai-optimizer")?.checked ?? true,
             enable_backtesting:    document.getElementById("set-backtesting")?.checked || false,
+            // v7 modules
+            enable_rl_learner:       document.getElementById("set-enable-rl-learner")?.checked ?? true,
+            enable_orderflow:        document.getElementById("set-enable-orderflow")?.checked ?? true,
+            enable_market_simulator: document.getElementById("set-enable-market-simulator")?.checked ?? true,
+            enable_auto_strategy:    document.getElementById("set-enable-auto-strategy")?.checked ?? true,
+            enable_launch_scanner:   document.getElementById("set-enable-launch-scanner")?.checked ?? true,
+            enable_mempool_v7:       document.getElementById("set-enable-mempool-v7")?.checked ?? true,
+            enable_whale_graph:      document.getElementById("set-enable-whale-graph")?.checked ?? true,
         };
         sendWS({ action: "update_settings", settings });
         addFeed("Saving settings…", "system");

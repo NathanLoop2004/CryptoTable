@@ -1,6 +1,6 @@
 # Sniper Bot — Documentación Técnica
 
-Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: detección automática de nuevos tokens en BSC/ETH, análisis multi-capa con 5 APIs + 21 módulos profesionales (incluye ML, sentimiento social, escaneo dinámico, MEV protection, copy trading, multi-DEX routing, AI strategy optimizer, backtesting engine), y ejecución de trades con 25 capas de protección.
+Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: detección automática de nuevos tokens en BSC/ETH/Solana/Avalanche, análisis multi-capa con 5 APIs + 28 módulos profesionales (incluye RL, Orderflow, Market Simulator, Auto Strategy, Predictive Launch Scanner, Mempool Intelligence, Whale Network Graph, ML, sentimiento social, escaneo dinámico, MEV protection v2, copy trading, multi-DEX routing 7 chains, AI strategy optimizer, backtesting engine), y ejecución de trades con 30 capas de protección.
 
 ---
 
@@ -97,6 +97,13 @@ Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: dete
 | `Services/copyTrader.py` | ~460 | **v6** Whale wallet following + auto-copy trades |
 | `Services/backtestEngine.py` | ~430 | **v6** Historical backtesting with virtual portfolio |
 | `Services/riskEngine.py` | 444 | Motor unificado de riesgo (7 señales → 0-100) |
+| `Services/reinforcementLearner.py` | ~600 | **v7** RL + Bayesian + Contextual Bandit decision engine |
+| `Services/orderflowAnalyzer.py` | ~520 | **v7** Orderflow analysis: bot/whale/manipulation detection |
+| `Services/marketSimulator.py` | ~560 | **v7** AMM + MEV + Gas War + Monte Carlo simulation |
+| `Services/autoStrategyGenerator.py` | ~550 | **v7** Genetic algorithm strategy generation |
+| `Services/predictiveLaunchScanner.py` | ~550 | **v7** Pre-mempool contract/launch detection |
+| `Services/mempoolAnalyzer.py` | ~580 | **v7** Advanced mempool analysis + frontrun detection |
+| `Services/whaleNetworkGraph.py` | ~600 | **v7** Wallet network graph + sybil detection |
 | `Services/rugDetector.py` | 417 | Monitoreo post-compra continuo |
 | `Services/alertService.py` | 404 | Multi-canal: Telegram/Discord/Email |
 | `Services/mempoolService.py` | 394 | Listener de transacciones pendientes |
@@ -1380,3 +1387,84 @@ python manage.py test trading.tests -v 2
 ---
 
 *Última actualización: Junio 2025 — v5 (16 módulos, 166 tests, 22 capas, ML + Social + Dynamic Scanner)*
+---
+
+## v7 Modules — Professional AI & Intelligence Layer
+
+### Nuevos módulos (7)
+
+| Módulo | Líneas | Función |
+|---|---|---|
+| `reinforcementLearner.py` | ~600 | Q-Learning + Contextual Bandit + Bayesian Optimization para decisiones de trading |
+| `orderflowAnalyzer.py` | ~520 | Análisis de orderflow: detección de bots, manipulación, tráfico orgánico vs artificial |
+| `marketSimulator.py` | ~560 | Simulación completa: AMM engine, MEV simulation, Gas War, Monte Carlo scenarios |
+| `autoStrategyGenerator.py` | ~550 | Generación automática de estrategias via algoritmo genético con crossover/mutación |
+| `predictiveLaunchScanner.py` | ~550 | Escaneo pre-mempool: análisis de bytecode, perfil del deployer, predicción de LP |
+| `mempoolAnalyzer.py` | ~580 | Análisis avanzado de mempool: clasificación de tx, detección de frontrun, gas wars |
+| `whaleNetworkGraph.py` | ~600 | Grafo de relaciones wallet: clustering, detección sybil, smart money tracking |
+
+### Mejoras a módulos existentes
+
+| Módulo | Mejora |
+|---|---|
+| `multiDexRouter.py` | +Solana (Jupiter/Raydium/Orca) + Avalanche (Trader Joe/Pangolin) = 7 chains total |
+| `mevProtection.py` | +v2 adaptive gas: análisis de gas del bloque pendiente, competencia de bots, urgencia (low/normal/high/critical) |
+
+### Pipeline v7
+
+```
+Token Detected → v1-v6 Analysis (existing) → v7 Analysis (parallel):
+  ├── RL Learner → decide(buy/sell/hold) + confidence
+  ├── Orderflow → organic_score + bot% + manipulation_risk
+  ├── Market Simulator → risk_score + recommendation + expected_pnl
+  ├── Auto Strategy → strategy match + confidence
+  ├── Launch Scanner → stage + risk + snipe_priority
+  ├── Mempool v7 → pressure + frontrun_risk + pending buy/sell count
+  └── Whale Graph → coordination + sybil_risk + smart_money_sentiment
+```
+
+### Safety Gates v7
+
+- **RL sell gate**: Blocks if RL says SELL with confidence ≥ threshold
+- **Orderflow manipulation gate**: Blocks if manipulation risk ≥ 0.7
+- **Simulator risk gate**: Blocks if simulation risk ≥ 70 or recommends AVOID
+- **Sybil network gate**: Blocks if sybil risk ≥ 0.7
+- **Mempool frontrun gate**: Blocks if frontrun risk ≥ 0.8
+
+### Settings v7
+
+| Setting | Default | Descripción |
+|---|---|---|
+| `enable_rl_learner` | true | Habilitar RL para decisiones |
+| `enable_orderflow` | true | Análisis de orderflow |
+| `enable_market_simulator` | true | Simulación de mercado |
+| `enable_auto_strategy` | true | Estrategias auto-generadas |
+| `enable_launch_scanner` | true | Escaneo predictivo de lanzamientos |
+| `enable_mempool_v7` | true | Análisis avanzado de mempool |
+| `enable_whale_graph` | true | Grafo de red de whales |
+| `rl_min_confidence` | 0.3 | Confianza mínima de RL para actuar |
+| `orderflow_max_manipulation` | 0.7 | Riesgo máximo de manipulación |
+| `sim_v7_max_risk` | 70 | Score máximo de riesgo del simulador |
+| `launch_min_priority` | 40 | Prioridad mínima para snipe |
+
+### Tests v7
+
+```bash
+python manage.py test trading.tests.test_v7_modules -v2
+```
+
+**Total: ~120 tests** covering all 7 new modules + 2 enhanced modules + integration.
+
+### Multi-Chain Support (Total)
+
+| Chain | ID | DEXes |
+|---|---|---|
+| BSC | 56 | PancakeSwap V2/V3, Biswap, MDEX, BabySwap |
+| Ethereum | 1 | Uniswap V2/V3, SushiSwap |
+| Arbitrum | 42161 | Camelot, SushiSwap, Uniswap V3 |
+| Base | 8453 | Aerodrome, BaseSwap, Uniswap V3 |
+| Polygon | 137 | QuickSwap, SushiSwap, Uniswap V3 |
+| **Solana** | **900** | **Jupiter V6, Raydium V4, Orca Whirlpool** |
+| **Avalanche** | **43114** | **Trader Joe V2, Pangolin** |
+
+*Actualización: Junio 2025 — v7 (28 módulos, 7 chains, ~420+ tests, 30 capas de seguridad, RL + Orderflow + Simulation + Auto Strategy + Predictive Launch + Mempool Intelligence + Whale Network)*
