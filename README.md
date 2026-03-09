@@ -1,6 +1,6 @@
 # TradingWeb — Plataforma de Trading + Sniper Bot
 
-Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** inteligente que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad**, ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls verificando LP lock.
+Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 6 módulos profesionales** (pump scoring, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls.
 
 ---
 
@@ -140,6 +140,17 @@ http://127.0.0.1:8000/
 10. **P&L Monitoring** → Actualiza cada ~3s con TP/SL automático
 11. **Auto-Sell** → Vende automáticamente al alcanzar TP, SL, o límite de tiempo
 
+### Módulos Profesionales v2
+
+| Módulo | Archivo | Descripción |
+|---|---|---|
+| 🚀 Pump Analyzer | `pumpAnalyzer.py` | Scoring 0-100 con 7 componentes (liquidez, holders, actividad, ballenas, momentum, edad, social) |
+| 🧪 Swap Simulator | `swapSimulator.py` | Simulación on-chain de buy+sell vía eth_call + análisis de bytecode |
+| 📡 Mempool Service | `mempoolService.py` | Escucha txs pendientes para detección 10-30s antes de confirmación |
+| 🛡️ Rug Detector | `rugDetector.py` | Monitoreo post-compra: LP drain, tax increase, dev selling |
+| 🔍 Pre-Launch | `preLaunchDetector.py` | Detecta tokens antes de listing (contract creation + router approval) |
+| 🐋 Smart Money | `smartMoneyTracker.py` | Trackea wallets rentables y emite señales cuando compran |
+
 ### 5 APIs de seguridad
 
 | API | Qué detecta |
@@ -252,7 +263,13 @@ TradingWeb/
 │   ├── Models/                  # Modelos de datos
 │   ├── Routes/                  # URL patterns de la app
 │   ├── Services/                # Lógica de negocio
-│   │   └── sniperService.py     # 🎯 Motor del Sniper Bot (~1860 líneas)
+│   │   ├── sniperService.py     # 🎯 Motor del Sniper Bot (~2300 líneas)
+│   │   ├── pumpAnalyzer.py      # 🚀 Pump scoring engine
+│   │   ├── swapSimulator.py     # 🧪 Swap simulation + bytecode analysis
+│   │   ├── mempoolService.py    # 📡 Mempool listener
+│   │   ├── rugDetector.py       # 🛡️ Post-buy rug detection
+│   │   ├── preLaunchDetector.py # 🔍 Pre-launch token detection
+│   │   └── smartMoneyTracker.py # 🐋 Smart money tracking
 │   ├── WebSocket/               # WebSocket consumers
 │   │   └── sniperConsumer.py    # Bridge Sniper ↔ Frontend (~161 líneas)
 │   ├── static/

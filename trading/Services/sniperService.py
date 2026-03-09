@@ -1,9 +1,18 @@
 """
 sniperService.py — Core sniper bot service.
 
-Architecture:
-  mempool listener → token detector → contract analyzer
-  → liquidity detector → sniper engine → trade executor → profit manager
+Architecture (Professional v2):
+  mempool listener → pre-launch detector → token detector → contract analyzer
+  → swap simulator → pump analyzer → smart money tracker
+  → liquidity detector → sniper engine → rug detector → profit manager
+
+Modules:
+  pumpAnalyzer.py      — Pump score engine (0–100)
+  swapSimulator.py     — On-chain honeypot detection via eth_call
+  mempoolService.py    — Mempool pending tx listener
+  rugDetector.py       — Post-buy rug pull monitoring
+  preLaunchDetector.py — Pre-launch token detection
+  smartMoneyTracker.py — Whale wallet tracking
 
 Uses web3.py to interact with BSC (or other EVM chains) via WebSocket RPC.
 Runs as an async background task inside Django Channels.
@@ -20,6 +29,14 @@ from typing import Optional
 from web3 import Web3, AsyncWeb3
 from web3.providers import WebSocketProvider
 import aiohttp
+
+# ── Professional modules ──
+from trading.Services.pumpAnalyzer import PumpAnalyzer, PumpScore
+from trading.Services.swapSimulator import SwapSimulator, BytecodeAnalyzer, SimulationResult
+from trading.Services.mempoolService import MempoolListener, MempoolEvent
+from trading.Services.rugDetector import RugDetector, RugAlert
+from trading.Services.preLaunchDetector import PreLaunchDetector, PreLaunchToken
+from trading.Services.smartMoneyTracker import SmartMoneyTracker, SmartMoneySignal
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +220,30 @@ class TokenInfo:
     dexscreener_price_change_h1: float = 0
     dexscreener_price_change_h6: float = 0
     dexscreener_price_change_h24: float = 0
+    # ── Pump Score (PumpAnalyzer) ──
+    pump_score: int = 0                  # 0–100 overall pump potential
+    pump_grade: str = ""                 # HIGH / MEDIUM / LOW / AVOID
+    pump_signals: list = field(default_factory=list)
+    # ── Swap Simulation (SwapSimulator) ──
+    sim_can_buy: bool = False
+    sim_can_sell: bool = False
+    sim_buy_tax: float = 0
+    sim_sell_tax: float = 0
+    sim_is_honeypot: bool = False
+    sim_honeypot_reason: str = ""
+    sim_gas_buy: int = 0
+    sim_gas_sell: int = 0
+    _simulation_ok: bool = False
+    # ── Bytecode Analysis ──
+    bytecode_has_selfdestruct: bool = False
+    bytecode_has_delegatecall: bool = False
+    bytecode_is_proxy: bool = False
+    bytecode_size: int = 0
+    bytecode_flags: list = field(default_factory=list)
+    _bytecode_ok: bool = False
+    # ── Smart Money ──
+    smart_money_buyers: int = 0
+    smart_money_confidence: int = 0
     # API tracking — did we actually get data?
     _goplus_ok: bool = False
     _honeypot_ok: bool = False
@@ -902,8 +943,17 @@ class ContractAnalyzer:
 
 class SniperBot:
     """
-    Main sniper bot engine.
+    Main sniper bot engine (Professional v2).
     Listens for new pairs, analyzes contracts, and manages positions.
+
+    Integrates:
+      - PumpAnalyzer:       scoring potential (0–100)
+      - SwapSimulator:      on-chain honeypot detection via eth_call
+      - BytecodeAnalyzer:   rug-pull bytecode pattern detection
+      - MempoolListener:    pending tx monitoring for early detection
+      - RugDetector:        post-buy rug pull monitoring
+      - PreLaunchDetector:  pre-launch token detection
+      - SmartMoneyTracker:  whale wallet tracking
     """
 
     def __init__(self, chain_id: int = 56):
@@ -927,6 +977,15 @@ class SniperBot:
             "max_concurrent": 5,         # parallel pair analyses
             "block_range": 5,            # blocks per scan cycle
             "poll_interval": 1.5,        # seconds between scans
+            # ── Professional modules (toggles) ──
+            "enable_mempool": True,      # mempool listener
+            "enable_pump_score": True,   # pump analyzer
+            "enable_swap_sim": True,     # swap simulation honeypot check
+            "enable_bytecode": True,     # bytecode analysis
+            "enable_rug_detector": True, # post-buy rug monitoring
+            "enable_prelaunch": True,    # pre-launch detection
+            "enable_smart_money": True,  # whale tracking
+            "min_pump_score": 40,        # minimum pump score to buy
         }
 
         # State
@@ -959,6 +1018,31 @@ class SniperBot:
 
         self.weth = WETH_ADDRESSES.get(chain_id, "")
         self.router_addr = ROUTER_ADDRESSES.get(chain_id, "")
+
+        # ── Professional modules ──
+        self.pump_analyzer = PumpAnalyzer(self.w3, chain_id)
+        self.swap_simulator = SwapSimulator(
+            self.w3, chain_id, self.router_addr, self.weth
+        ) if self.router_addr and self.weth else None
+        self.bytecode_analyzer = BytecodeAnalyzer(self.w3)
+        self.mempool_listener = MempoolListener(
+            chain_id, self.w3,
+            FACTORY_ADDRESSES.get(chain_id, ""),
+            self.router_addr, self.weth,
+        ) if self.router_addr else None
+        self.rug_detector = RugDetector(
+            self.w3, chain_id, self.router_addr, self.weth
+        ) if self.router_addr else None
+        self.prelaunch_detector = PreLaunchDetector(
+            self.w3, chain_id, self.router_addr,
+            FACTORY_ADDRESSES.get(chain_id, ""),
+        ) if self.router_addr else None
+        self.smart_money = SmartMoneyTracker(self.w3, chain_id)
+
+        # Background task handles for professional modules
+        self._mempool_task: asyncio.Task | None = None
+        self._rug_task: asyncio.Task | None = None
+        self._prelaunch_task: asyncio.Task | None = None
 
         # Callback to push events to frontend
         self._event_callback = None
@@ -1119,6 +1203,29 @@ class SniperBot:
             "price_change_h1": info.dexscreener_price_change_h1,
             "price_change_h6": info.dexscreener_price_change_h6,
             "price_change_h24": info.dexscreener_price_change_h24,
+            # ── Professional v2 data ──
+            # Pump Score
+            "pump_score": info.pump_score,
+            "pump_grade": info.pump_grade,
+            "pump_signals": list(info.pump_signals),
+            # Swap Simulation
+            "sim_can_buy": info.sim_can_buy,
+            "sim_can_sell": info.sim_can_sell,
+            "sim_buy_tax": info.sim_buy_tax,
+            "sim_sell_tax": info.sim_sell_tax,
+            "sim_is_honeypot": info.sim_is_honeypot,
+            "sim_honeypot_reason": info.sim_honeypot_reason,
+            "simulation_ok": info._simulation_ok,
+            # Bytecode
+            "bytecode_has_selfdestruct": info.bytecode_has_selfdestruct,
+            "bytecode_has_delegatecall": info.bytecode_has_delegatecall,
+            "bytecode_is_proxy": info.bytecode_is_proxy,
+            "bytecode_size": info.bytecode_size,
+            "bytecode_flags": list(info.bytecode_flags),
+            "bytecode_ok": info._bytecode_ok,
+            # Smart Money
+            "smart_money_buyers": info.smart_money_buyers,
+            "smart_money_confidence": info.smart_money_confidence,
         }
 
     # ─── Refresh detected tokens (periodic re-check) ───────
@@ -1364,6 +1471,80 @@ class SniperBot:
             "liquidity_usd": round(usd_liq, 2),
         })
 
+        # ── Professional v2: parallel deep analysis ──
+        try:
+            v2_tasks = []
+            # Pump score analysis (no extra API calls — uses existing TokenInfo)
+            if self.settings.get("enable_pump_score", True):
+                v2_tasks.append(("pump", asyncio.ensure_future(
+                    self.pump_analyzer.analyze(token_info, usd_liq, pair_address)
+                )))
+            # Swap simulation: on-chain honeypot verification
+            if self.settings.get("enable_swap_sim", True) and self.swap_simulator:
+                v2_tasks.append(("sim", asyncio.ensure_future(
+                    self.swap_simulator.simulate(new_token)
+                )))
+            # Bytecode analysis: opcode-level malware detection
+            if self.settings.get("enable_bytecode", True) and self.bytecode_analyzer:
+                v2_tasks.append(("bytecode", asyncio.ensure_future(
+                    self.bytecode_analyzer.analyze_bytecode(new_token)
+                )))
+            # Smart money: check if tracked whales already bought
+            if self.settings.get("enable_smart_money", False) and self.smart_money:
+                v2_tasks.append(("smart", asyncio.ensure_future(
+                    self.smart_money.check_smart_buyers(new_token, pair_address)
+                )))
+
+            if v2_tasks:
+                results = await asyncio.gather(
+                    *[t[1] for t in v2_tasks], return_exceptions=True
+                )
+                for (label, _), result in zip(v2_tasks, results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"v2 {label} analysis failed for {token_info.symbol}: {result}")
+                        continue
+                    if label == "pump" and result:
+                        token_info.pump_score = result.total_score
+                        token_info.pump_grade = result.grade
+                        token_info.pump_signals = result.signals
+                    elif label == "sim" and result:
+                        token_info.sim_can_buy = result.can_buy
+                        token_info.sim_can_sell = result.can_sell
+                        token_info.sim_buy_tax = result.buy_tax_percent
+                        token_info.sim_sell_tax = result.sell_tax_percent
+                        token_info.sim_is_honeypot = result.is_honeypot
+                        token_info.sim_honeypot_reason = result.honeypot_reason
+                        token_info.sim_gas_buy = result.gas_estimate_buy
+                        token_info.sim_gas_sell = result.gas_estimate_sell
+                        token_info._simulation_ok = True
+                    elif label == "bytecode" and result:
+                        token_info.bytecode_has_selfdestruct = result.get("has_selfdestruct", False)
+                        token_info.bytecode_has_delegatecall = result.get("has_delegatecall", False)
+                        token_info.bytecode_is_proxy = result.get("is_minimal_proxy", False)
+                        token_info.bytecode_size = result.get("bytecode_size", 0)
+                        token_info.bytecode_flags = result.get("risk_flags", [])
+                        token_info._bytecode_ok = True
+                    elif label == "smart" and result is not None:
+                        # result is list[SmartMoneySignal]
+                        token_info.smart_money_buyers = len(result)
+                        token_info.smart_money_confidence = (
+                            max(s.confidence for s in result) / 100.0 if result else 0.0
+                        )
+
+                # Re-emit token_detected with updated v2 data
+                await self._emit("token_detected",
+                    self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
+                )
+                logger.info(
+                    f"v2 analysis for {token_info.symbol}: "
+                    f"pump={token_info.pump_score}({token_info.pump_grade}) "
+                    f"sim_hp={token_info.sim_is_honeypot} "
+                    f"bytecode_flags={token_info.bytecode_flags} "
+                    f"smart={token_info.smart_money_buyers}"
+                )
+        except Exception as e:
+            logger.error(f"v2 analysis pipeline error for {token_info.symbol}: {e}")
+
         # Check if safe enough
         passes_safety = True
         if self.settings["only_safe"] and token_info.risk == "danger":
@@ -1412,6 +1593,38 @@ class SniperBot:
         elif token_info.lp_lock_hours_remaining < 24:
             passes_safety = False
             logger.info(f"Skipping {token_info.symbol}: LP lock only {token_info.lp_lock_hours_remaining}h remaining (need >24h)")
+
+        # ── Professional v2 safety gates ──
+        # Pump score gate
+        if self.settings.get("enable_pump_score", True) and token_info.pump_score > 0:
+            min_pump = self.settings.get("min_pump_score", 40)
+            if token_info.pump_grade == "AVOID":
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: pump grade AVOID (score={token_info.pump_score})")
+            elif token_info.pump_score < min_pump:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: pump score {token_info.pump_score} < {min_pump}")
+
+        # Swap simulation gate — if simulation succeeded, use its results
+        if token_info._simulation_ok:
+            if token_info.sim_is_honeypot:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: swap simulation honeypot — {token_info.sim_honeypot_reason}")
+            if token_info.sim_buy_tax > self.settings["max_buy_tax"]:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: simulated buy tax {token_info.sim_buy_tax}% > {self.settings['max_buy_tax']}%")
+            if token_info.sim_sell_tax > self.settings["max_sell_tax"]:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: simulated sell tax {token_info.sim_sell_tax}% > {self.settings['max_sell_tax']}%")
+
+        # Bytecode gate — block dangerous opcodes
+        if token_info._bytecode_ok and token_info.bytecode_flags:
+            if token_info.bytecode_has_selfdestruct:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: SELFDESTRUCT opcode found")
+            if token_info.bytecode_has_delegatecall:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: DELEGATECALL opcode — can be hijacked")
 
         # Price history check: reject severe dumps AND reject already-pumped tokens
         if token_info._dexscreener_ok:
@@ -1720,6 +1933,60 @@ class SniperBot:
         self._sync_task = asyncio.ensure_future(self._run_sync_listener())
         await self._emit("scan_info", {"message": "🚀 Real-time Sync WS listener launched"})
 
+        # ── Professional v2: launch background monitoring tasks ──
+        if self.settings.get("enable_mempool", False) and self.mempool_listener:
+            async def _mempool_event_cb(event):
+                await self._emit("mempool_event", {
+                    "type": event.method,
+                    "token": event.token_address,
+                    "tx_hash": event.tx_hash,
+                    "method": event.method,
+                    "value_bnb": event.value_native,
+                })
+            self.mempool_listener.set_callbacks(_mempool_event_cb, self._emit)
+            self._mempool_task = asyncio.ensure_future(self.mempool_listener.run())
+            await self._emit("scan_info", {"message": "📡 Mempool listener launched"})
+
+        if self.settings.get("enable_rug_detector", True) and self.rug_detector:
+            async def _rug_alert_cb(alert):
+                # Find symbol from watched positions
+                token_key = alert.token_address.lower()
+                sym = ""
+                for pos in self.rug_detector._watched.values():
+                    if pos.token_address.lower() == token_key:
+                        sym = pos.symbol
+                        break
+                level = alert.alert_type  # EMERGENCY / WARNING / INFO
+                action = "sell_immediately" if alert.should_sell else "monitor"
+                await self._emit("rug_alert", {
+                    "token": alert.token_address,
+                    "symbol": sym,
+                    "alert_type": alert.alert_type,
+                    "rug_type": alert.rug_type,
+                    "severity": alert.severity,
+                    "message": alert.description,
+                    "level": level,
+                    "action": action,
+                    "tx_hash": alert.tx_hash,
+                })
+            self.rug_detector.set_callbacks(_rug_alert_cb, self._emit)
+            self._rug_task = asyncio.ensure_future(self.rug_detector.run())
+            await self._emit("scan_info", {"message": "🛡️ Rug detector launched"})
+
+        if self.settings.get("enable_prelaunch", False) and self.prelaunch_detector:
+            async def _prelaunch_cb(token):
+                await self._emit("prelaunch_detected", {
+                    "address": token.address,
+                    "name": token.name,
+                    "symbol": token.symbol,
+                    "launch_probability": token.launch_probability,
+                    "total_supply": str(getattr(token, 'total_supply', 0)),
+                    "router_approved": token.approved_router,
+                })
+            self.prelaunch_detector.set_callbacks(_prelaunch_cb, self._emit)
+            self._prelaunch_task = asyncio.ensure_future(self.prelaunch_detector.run())
+            await self._emit("scan_info", {"message": "🔍 Pre-launch detector launched"})
+
         price_tick = 0
         enrich_tick = 0           # Fast enrichment cycle (every ~3s)
         slow_tick = 0              # Full refresh cycle (every ~15s)
@@ -1858,6 +2125,24 @@ class SniperBot:
                 pass
             self._sync_task = None
 
+        # Cancel v2 background tasks
+        for task_attr in ("_mempool_task", "_rug_task", "_prelaunch_task"):
+            task = getattr(self, task_attr, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            setattr(self, task_attr, None)
+        # Stop module loops
+        if hasattr(self, 'mempool_listener'):
+            self.mempool_listener.stop()
+        if hasattr(self, 'rug_detector'):
+            self.rug_detector.stop()
+        if hasattr(self, 'prelaunch_detector'):
+            self.prelaunch_detector.stop()
+
         # Cleanup shared session
         if self._http_session and not self._http_session.closed:
             await self._http_session.close()
@@ -1945,7 +2230,7 @@ class SniperBot:
 
     def get_state(self) -> dict:
         """Return full bot state for frontend sync."""
-        return {
+        state = {
             "running": self.running,
             "chain_id": self.chain_id,
             "settings": self.settings,
@@ -1954,6 +2239,19 @@ class SniperBot:
             "active_snipes": [s.to_dict() for s in self.active_snipes],
             "recent_events": self.events_log[-30:],
         }
+        # v2 module stats
+        try:
+            if hasattr(self, 'mempool_listener'):
+                state["mempool_stats"] = self.mempool_listener.get_stats()
+            if hasattr(self, 'rug_detector'):
+                state["rug_detector_stats"] = self.rug_detector.get_stats()
+            if hasattr(self, 'prelaunch_detector'):
+                state["prelaunch_watchlist"] = self.prelaunch_detector.get_watchlist()
+            if hasattr(self, 'smart_money'):
+                state["smart_money_stats"] = self.smart_money.get_stats()
+        except Exception:
+            pass
+        return state
 
     def add_manual_snipe(self, token_address: str, symbol: str, buy_price: float, amount_native: float, tx_hash: str, auto_hold_hours: float = 0):
         """Register a position bought from the frontend (user executed the swap)."""
@@ -1973,6 +2271,28 @@ class SniperBot:
             max_hold_hours=hold_hours,
         )
         self.active_snipes.append(snipe)
+
+        # Register with rug detector for post-buy monitoring
+        if self.settings.get("enable_rug_detector", True) and hasattr(self, 'rug_detector'):
+            try:
+                # Find token info for pair address and creator
+                pair_addr = ""
+                creator = ""
+                for p in reversed(self.detected_pairs):
+                    if p.new_token.lower() == token_address.lower():
+                        pair_addr = p.pair_address
+                        if p.token_info:
+                            creator = getattr(p.token_info, 'owner_address', '') or ''
+                        break
+                self.rug_detector.add_position(
+                    token_address=token_address,
+                    pair_address=pair_addr,
+                    symbol=symbol,
+                    creator_address=creator,
+                )
+            except Exception as e:
+                logger.debug(f"Rug detector registration failed: {e}")
+
         return snipe.to_dict()
 
     def mark_snipe_sold(self, token_address: str, sell_tx: str = "") -> dict | None:
@@ -1981,5 +2301,11 @@ class SniperBot:
             if snipe.token_address.lower() == token_address.lower() and snipe.status == "active":
                 snipe.status = "sold"
                 snipe.sell_tx = sell_tx
+                # Remove from rug detector monitoring
+                if hasattr(self, 'rug_detector'):
+                    try:
+                        self.rug_detector.remove_position(token_address)
+                    except Exception:
+                        pass
                 return snipe.to_dict()
         return None

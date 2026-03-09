@@ -1,7 +1,8 @@
 # Sniper Bot — Documentación Técnica Completa
 
 > Motor de detección y trading automático de tokens nuevos en BSC/ETH.  
-> Archivo principal: `trading/Services/sniperService.py` (~1980 líneas)
+> Archivo principal: `trading/Services/sniperService.py` (~2300 líneas)  
+> Módulos profesionales v2: 6 servicios adicionales (~2200 líneas)
 
 ---
 
@@ -678,6 +679,100 @@ Capa 10: Price dump check → no compra tokens en caída libre
 Capa 11: Stop Loss 20% → venta automática si cae
 Capa 12: Max Hold Hours → vende 1h antes de que expire el lock
 Capa 13: Sync WS Listener → detecta cambios de precio en real-time
+Capa 14: Pump Score 0-100 → rechaza tokens con grade AVOID (<40)
+Capa 15: Swap Simulation → verifica on-chain buy+sell con eth_call
+Capa 16: Bytecode Analysis → detecta SELFDESTRUCT/DELEGATECALL
+Capa 17: Rug Detector → monitoreo post-compra (LP drain, dev sell)
+Capa 18: Smart Money → señal positiva si ballenas compran
+```
+
+---
+
+## Módulos Profesionales v2
+
+Seis servicios adicionales que elevan la calidad del bot:
+
+### Pump Analyzer (`pumpAnalyzer.py`)
+
+Motor de scoring 0-100 que evalúa el potencial de pump de un token:
+
+| Componente | Peso | Descripción |
+|---|---|---|
+| Liquidity | 20% | Sweet spot $8k–$120k |
+| Holder | 15% | Distribución saludable de holders |
+| Activity | 20% | Ratio buy/sell, volumen 24h |
+| Whale | 15% | Acumulación de ballenas |
+| Momentum | 15% | Patrón de precio gradual |
+| Age | 10% | Tokens frescos (1-24h ideal) |
+| Social | 5% | Web, redes, CoinGecko |
+
+**Grades:** HIGH (80-100) / MEDIUM (60-79) / LOW (40-59) / AVOID (0-39)
+
+No hace llamadas API adicionales — opera 100% sobre datos existentes de TokenInfo.
+
+### Swap Simulator (`swapSimulator.py`)
+
+Simulación on-chain de compra y venta vía `eth_call`:
+
+1. **Buy simulation:** `swapExactETHForTokensSupportingFeeOnTransferTokens` → calcula buy tax real
+2. **Sell simulation:** `approve` + `swapExactTokensForETHSupportingFeeOnTransferTokens` → calcula sell tax
+3. Si sell revierte → **honeypot confirmado por simulación**
+
+**BytecodeAnalyzer** (incluido): Detecta opcodes peligrosos:
+- `SELFDESTRUCT (0xFF)` — contrato puede autodestruirse
+- `DELEGATECALL (0xF4)` — lógica puede ser reemplazada
+- EIP-1167 minimal proxy — lógica vive en otro contrato
+- Bytecode tamaño anómalo (<100 o >25000 bytes)
+
+### Mempool Service (`mempoolService.py`)
+
+Escucha transacciones pendientes para detectar tokens 10-30s antes de confirmación:
+
+- **Métodos monitoreados:** addLiquidityETH, addLiquidity, removeLiquidity, createPair, approve
+- Suscripción: `alchemy_pendingTransactions` → fallback `newPendingTransactions`
+- Trackea ~5000 tx hashes para evitar duplicados
+- Emite `mempool_event` al frontend en real-time
+
+### Rug Detector (`rugDetector.py`)
+
+Monitoreo post-compra de posiciones activas:
+
+- **25+ method selectors monitoreados:** removeLiquidity, setFee, blacklist, pause, transferOwnership, mint, etc.
+- Chequea cada ~3s: Transfer events, LP reserves, balance del creator
+- **EMERGENCY (severity 8-10):** liquidity drain → auto-sell inmediato
+- **WARNING (severity 5-7):** tax increase, dev dump
+- **INFO (severity 1-4):** patrones inusuales
+
+### Pre-Launch Detector (`preLaunchDetector.py`)
+
+Detecta tokens ANTES de listing en DEX:
+
+1. Escanea bloques para contract creation txs (`to=None`)
+2. Verifica bytecode por selectores ERC-20 (≥5/9 matches)
+3. Monitorea aprobación de router (señal más fuerte de launch)
+4. Launch probability 0-100: base 20 + erc20(10) + supply(15) + router(35) + named(10) + launchpad(20)
+5. Auto-limpieza: elimina watchlist entries después de 2h sin launch
+
+### Smart Money Tracker (`smartMoneyTracker.py`)
+
+Rastreo de wallets rentables:
+
+- **Análisis automático:** Para tokens pumpeados, identifica compradores tempranos via Transfer logs
+- **Base de datos rolling:** Mantiene wallets con historial de trades
+- **Smart score:** win_rate(60%) + trade_count(20%) + recency(10%) + known_bonus(10%)
+- Emite señal `smart_money_signal` cuando ballenas trackadas compran un token nuevo
+
+### Settings v2
+
+```python
+"enable_mempool": False,      # WSS mempool (requiere nodo compatible)
+"enable_pump_score": True,    # Pump scoring 0-100
+"enable_swap_sim": True,      # Swap simulation vía eth_call
+"enable_bytecode": True,      # Bytecode analysis
+"enable_rug_detector": True,  # Post-buy rug monitoring
+"enable_prelaunch": False,    # Pre-launch detection (experimental)
+"enable_smart_money": False,  # Smart money tracking (experimental)
+"min_pump_score": 40,         # Mínimo pump score para comprar
 ```
 
 ---

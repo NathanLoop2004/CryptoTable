@@ -372,6 +372,38 @@
       <div>${apiDot(data.coingecko_ok)} CoinGecko</div>
       <div>${apiDot(data.tokensniffer_ok)} TokenSniffer</div>
     </div>
+    ${data.pump_score != null ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🚀 Pump Score</div>
+      <div>Score: <strong style="color:${data.pump_score>=80?'#02c076':data.pump_score>=60?'#f0b90b':data.pump_score>=40?'#f39c12':'#e74c3c'}">${data.pump_score}/100</strong></div>
+      <div>Grade: <strong>${data.pump_grade || '—'}</strong></div>
+      ${(data.pump_signals||[]).map(s => `<div>📌 ${s}</div>`).join('')}
+    </div>` : ''}
+    ${data.simulation_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🧪 Swap Simulation</div>
+      <div>Can Buy: ${data.sim_can_buy ? '<span style="color:#02c076">✓</span>' : '<span style="color:#e74c3c">✗</span>'}</div>
+      <div>Can Sell: ${data.sim_can_sell ? '<span style="color:#02c076">✓</span>' : '<span style="color:#e74c3c">✗</span>'}</div>
+      <div>Buy Tax (sim): ${(data.sim_buy_tax||0).toFixed(1)}%</div>
+      <div>Sell Tax (sim): ${(data.sim_sell_tax||0).toFixed(1)}%</div>
+      <div>Honeypot (sim): ${data.sim_is_honeypot ? '🍯 <span style="color:#e74c3c">SÍ</span>' : '<span style="color:#02c076">NO ✓</span>'}</div>
+      ${data.sim_honeypot_reason ? `<div>Razón: ${data.sim_honeypot_reason}</div>` : ''}
+    </div>` : ''}
+    ${data.bytecode_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🔬 Bytecode</div>
+      <div>Size: ${data.bytecode_size || '—'} bytes</div>
+      <div>${boolIcon(data.bytecode_has_selfdestruct)} SELFDESTRUCT</div>
+      <div>${boolIcon(data.bytecode_has_delegatecall)} DELEGATECALL</div>
+      <div>${boolIcon(data.bytecode_is_proxy)} Proxy Pattern</div>
+      ${(data.bytecode_flags||[]).map(f => `<div>⚠️ ${f}</div>`).join('')}
+    </div>` : ''}
+    ${data.smart_money_buyers > 0 ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🐋 Smart Money</div>
+      <div>Buyers: <strong style="color:#02c076">${data.smart_money_buyers}</strong></div>
+      <div>Confidence: ${(data.smart_money_confidence*100).toFixed(0)}%</div>
+    </div>` : ''}
   </div>
   <div class="tlc-reasons">
     <div class="tlc-title">🚩 Risk Reasons</div>
@@ -787,6 +819,34 @@
                     }
                     renderSnipes();
                 }
+                break;
+
+            /* ── Professional v2 events ─────────────────── */
+            case "mempool_event":
+                addFeed(`📡 Mempool: ${data.method} — token ${shortAddr(data.token)} — ${data.value_bnb ? data.value_bnb + ' BNB' : ''} (tx: ${shortAddr(data.tx_hash)})`, "detect");
+                break;
+
+            case "rug_alert":
+                {
+                    const levelIcon = data.level === "EMERGENCY" ? "🚨" : data.level === "WARNING" ? "⚠️" : "ℹ️";
+                    const feedType = data.level === "EMERGENCY" ? "error" : data.level === "WARNING" ? "warn" : "system";
+                    addFeed(`${levelIcon} RUG ALERT [${data.level}]: ${data.symbol} — ${data.message}`, feedType);
+
+                    // Auto-sell on EMERGENCY
+                    if (data.level === "EMERGENCY" && data.action === "sell_immediately") {
+                        const slip = parseFloat(setSlippage.value) || 12;
+                        addFeed(`🚨 Emergency sell triggered for ${data.symbol}!`, "error");
+                        executeSnipeSell(data.token, data.symbol, slip, "rug");
+                    }
+                }
+                break;
+
+            case "prelaunch_detected":
+                addFeed(`🔍 Pre-launch: ${data.symbol || 'Unknown'} (${shortAddr(data.address)}) — Launch prob: ${data.launch_probability}%${data.router_approved ? ' ✅ Router approved!' : ''}`, "detect");
+                break;
+
+            case "smart_money_signal":
+                addFeed(`🐋 Smart Money: ${data.wallets || 0} whale(s) buying ${data.symbol || shortAddr(data.token)} — confidence ${((data.confidence||0)*100).toFixed(0)}%`, "opportunity");
                 break;
 
             case "error":
