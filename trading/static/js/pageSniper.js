@@ -166,6 +166,33 @@
     const logModalBody      = $("log-modal-body");
     const btnCloseLogModal  = $("btn-close-log-modal");
 
+    // v4: Dashboard KPI refs
+    const kpiTrades       = $("kpi-trades");
+    const kpiWinRate      = $("kpi-winrate");
+    const kpiPnl          = $("kpi-pnl");
+    const kpiDetections   = $("kpi-detections");
+    const kpiFilterRate   = $("kpi-filter-rate");
+    const kpiAvgSpeed     = $("kpi-avg-speed");
+    const btnRefreshDash  = $("btn-refresh-dashboard");
+
+    // v4: Effectiveness refs
+    const effSafe         = $("eff-safe-pct");
+    const effAvgGain      = $("eff-avg-gain");
+    const effAvgLoss      = $("eff-avg-loss");
+    const effTxFail       = $("eff-tx-fail");
+    const effAvgHold      = $("eff-avg-hold");
+    const effBestTrade    = $("eff-best-trade");
+
+    // v4: Resource bar refs
+    const resMemory       = $("res-memory");
+    const resCpu          = $("res-cpu");
+    const resTokens       = $("res-tokens");
+    const resWs           = $("res-ws");
+    const resRpc          = $("res-rpc");
+
+    // v4: Tutorial
+    const tutorialOverlay = $("tutorial-overlay");
+
     /* ═══════════════════════════════════════════════════════════════
      *  State
      * ═══════════════════════════════════════════════════════════════ */
@@ -192,6 +219,11 @@
         liquidity: 0,
         sniped: 0,
     };
+
+    // v4: Dashboard chart instances
+    let chartPnl        = null;
+    let chartDetections = null;
+    let _dashboardTimer = null;
 
     /* ═══════════════════════════════════════════════════════════════
      *  Feed
@@ -403,6 +435,42 @@
       <div class="tlc-title">🐋 Smart Money</div>
       <div>Buyers: <strong style="color:#02c076">${data.smart_money_buyers}</strong></div>
       <div>Confidence: ${(data.smart_money_confidence*100).toFixed(0)}%</div>
+    </div>` : ''}
+    ${data.dev_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">👨‍💻 Dev Tracker</div>
+      <div>Score: <strong style="color:${data.dev_score>=70?'#02c076':data.dev_score>=40?'#f0b90b':'#e74c3c'}">${data.dev_score}/100</strong></div>
+      <div>Label: <strong>${data.dev_label || '—'}</strong></div>
+      <div>Tracked: ${data.dev_is_tracked ? '<span style="color:#02c076">SÍ</span>' : 'NO'}</div>
+      <div>Launches: ${data.dev_total_launches || 0}</div>
+      <div>Exitosos: <span style="color:#02c076">${data.dev_successful_launches || 0}</span></div>
+      <div>Rugs: <span style="color:#e74c3c">${data.dev_rug_pulls || 0}</span></div>
+      <div>Best x: ${(data.dev_best_multiplier||0).toFixed(1)}x</div>
+      ${data.dev_is_serial_scammer ? '<div style="color:#e74c3c;font-weight:700">⛔ SERIAL SCAMMER</div>' : ''}
+    </div>` : ''}
+    ${data.risk_engine_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🎯 Risk Engine</div>
+      <div>Score: <strong style="color:${data.risk_engine_score>=80?'#02c076':data.risk_engine_score>=65?'#f0b90b':data.risk_engine_score>=50?'#f39c12':'#e74c3c'}">${data.risk_engine_score}/100</strong></div>
+      <div>Action: <strong style="color:${data.risk_engine_action==='STRONG_BUY'||data.risk_engine_action==='BUY'?'#02c076':data.risk_engine_action==='WATCH'?'#f0b90b':'#e74c3c'}">${data.risk_engine_action}</strong></div>
+      <div>Confidence: ${(data.risk_engine_confidence*100).toFixed(0)}%</div>
+      ${data.risk_engine_hard_stop ? '<div style="color:#e74c3c;font-weight:700">⛔ HARD STOP</div>' : ''}
+      ${(data.risk_engine_signals||[]).slice(0,5).map(s => `<div>📌 ${s}</div>`).join('')}
+    </div>` : ''}
+    ${data.pump_market_cap_usd > 0 || data.pump_holder_growth_rate > 0 ? `
+    <div class="tlc-section">
+      <div class="tlc-title">📊 Pump v3 Avanzado</div>
+      ${data.pump_market_cap_usd > 0 ? `<div>Market Cap: <strong>$${Number(data.pump_market_cap_usd).toLocaleString()}</strong></div>` : ''}
+      ${data.pump_mcap_score > 0 ? `<div>MCap Score: ${data.pump_mcap_score}/100</div>` : ''}
+      ${data.pump_holder_growth_rate > 0 ? `<div>Holder Growth: <strong style="color:#02c076">+${data.pump_holder_growth_rate.toFixed(2)}/min</strong></div>` : ''}
+      ${data.pump_holder_growth_score > 0 ? `<div>Growth Score: ${data.pump_holder_growth_score}/100</div>` : ''}
+      ${data.pump_lp_growth_percent != null && data.pump_lp_growth_percent !== 0 ? `<div>LP Growth: <span style="color:${data.pump_lp_growth_percent>=0?'#02c076':'#e74c3c'}">${data.pump_lp_growth_percent>0?'+':''}${data.pump_lp_growth_percent.toFixed(1)}%</span></div>` : ''}
+      ${data.pump_lp_growth_score > 0 ? `<div>LP Score: ${data.pump_lp_growth_score}/100</div>` : ''}
+    </div>` : ''}
+    ${data.backend_buy_available ? `
+    <div class="tlc-section">
+      <div class="tlc-title">⚡ Backend Executor</div>
+      <div style="color:#02c076;font-weight:600">Ready for auto-execution</div>
     </div>` : ''}
   </div>
   <div class="tlc-reasons">
@@ -753,14 +821,19 @@
                 flashPipe("pipe-snipe");
                 {
                     const lockInfo = data.lp_locked ? ` | 🔒 LP ${(data.lp_lock_percent||0).toFixed(0)}% locked (${(data.lp_lock_hours||0).toFixed(1)}h)` : "";
-                    addFeed(`🎯 OPPORTUNITY: ${data.symbol} — $${data.liquidity_usd} liquidity — Risk: ${data.risk}${lockInfo}`, "opportunity");
+                    const riskInfo = data.risk_engine_score > 0 ? ` | 🎯 Risk: ${data.risk_engine_score}/100 (${data.risk_engine_action})` : "";
+                    const devInfo = data.dev_label ? ` | 👨‍💻 Dev: ${data.dev_label} (${data.dev_score})` : "";
+                    addFeed(`🎯 OPPORTUNITY: ${data.symbol} — $${data.liquidity_usd} liquidity — Risk: ${data.risk}${lockInfo}${riskInfo}${devInfo}`, "opportunity");
                 }
-                if (data.auto_buy) {
+                if (data.auto_buy && !data.backend_buy_available) {
+                    // Frontend auto-buy only when backend executor is not active
                     addFeed(`🤖 Auto-buy is ON — executing swap…`, "system");
                     const buyAmt  = parseFloat(setBuyAmount.value) || 0.05;
                     const slip    = parseFloat(setSlippage.value)  || 12;
                     const autoHold = data.auto_hold_hours || 0;
                     executeSnipeBuy(data.token, data.symbol, buyAmt, slip, "auto", autoHold);
+                } else if (data.auto_buy && data.backend_buy_available) {
+                    addFeed(`⚡ Backend executor handling auto-buy for ${data.symbol}…`, "system");
                 }
                 break;
 
@@ -849,8 +922,26 @@
                 addFeed(`🐋 Smart Money: ${data.wallets || 0} whale(s) buying ${data.symbol || shortAddr(data.token)} — confidence ${((data.confidence||0)*100).toFixed(0)}%`, "opportunity");
                 break;
 
+            /* ── Professional v3 events ─────────────────── */
+            case "backend_buy_executed":
+                addFeedHTML(`⚡ <strong>BACKEND BUY</strong>: ${data.symbol} — ${data.amount_native} ${nativeSymbol()} | Gas: ${data.gas_used} | ${data.execution_ms}ms | <a href="${explorerTxUrl(data.tx_hash)}" target="_blank" style="color:#02c076;text-decoration:underline;">${(data.tx_hash||'').slice(0,14)}…</a>`, "opportunity");
+                break;
+
+            case "backend_buy_failed":
+                addFeed(`⚡ Backend buy FAILED for ${data.symbol}: ${data.error}`, "error");
+                break;
+
             case "error":
                 addFeed(`❌ ${data.message}`, "error");
+                break;
+
+            case "dashboard":
+            case "dashboard_response":
+                updateDashboard(data);
+                break;
+
+            case "alert_config_updated":
+                addFeed("🔔 Alert config updated.", "system");
                 break;
         }
     }
@@ -924,6 +1015,48 @@
                     has_website: !!ti.has_website,
                     tokensniffer_score: ti.tokensniffer_score ?? -1,
                     tokensniffer_is_scam: !!ti.tokensniffer_is_scam,
+                    // v2 analysis
+                    pump_score: ti.pump_score ?? null,
+                    pump_grade: ti.pump_grade || '',
+                    pump_signals: ti.pump_signals || [],
+                    simulation_ok: !!ti._simulation_ok,
+                    sim_can_buy: !!ti.sim_can_buy,
+                    sim_can_sell: !!ti.sim_can_sell,
+                    sim_buy_tax: ti.sim_buy_tax ?? 0,
+                    sim_sell_tax: ti.sim_sell_tax ?? 0,
+                    sim_is_honeypot: !!ti.sim_is_honeypot,
+                    sim_honeypot_reason: ti.sim_honeypot_reason || '',
+                    bytecode_ok: !!ti._bytecode_ok,
+                    bytecode_size: ti.bytecode_size || 0,
+                    bytecode_has_selfdestruct: !!ti.bytecode_has_selfdestruct,
+                    bytecode_has_delegatecall: !!ti.bytecode_has_delegatecall,
+                    bytecode_is_proxy: !!ti.bytecode_is_proxy,
+                    bytecode_flags: ti.bytecode_flags || [],
+                    smart_money_buyers: ti.smart_money_buyers || 0,
+                    smart_money_confidence: ti.smart_money_confidence || 0,
+                    // v3 analysis
+                    dev_ok: !!ti._dev_ok,
+                    dev_score: ti.dev_score || 0,
+                    dev_label: ti.dev_label || '',
+                    dev_is_tracked: !!ti.dev_is_tracked,
+                    dev_total_launches: ti.dev_total_launches || 0,
+                    dev_successful_launches: ti.dev_successful_launches || 0,
+                    dev_rug_pulls: ti.dev_rug_pulls || 0,
+                    dev_best_multiplier: ti.dev_best_multiplier || 0,
+                    dev_is_serial_scammer: !!ti.dev_is_serial_scammer,
+                    risk_engine_ok: !!ti._risk_engine_ok,
+                    risk_engine_score: ti.risk_engine_score || 0,
+                    risk_engine_action: ti.risk_engine_action || '',
+                    risk_engine_confidence: ti.risk_engine_confidence || 0,
+                    risk_engine_hard_stop: !!ti.risk_engine_hard_stop,
+                    risk_engine_signals: ti.risk_engine_signals || [],
+                    pump_mcap_score: ti.pump_mcap_score || 0,
+                    pump_market_cap_usd: ti.pump_market_cap_usd || 0,
+                    pump_holder_growth_rate: ti.pump_holder_growth_rate || 0,
+                    pump_lp_growth_percent: ti.pump_lp_growth_percent || 0,
+                    pump_holder_growth_score: ti.pump_holder_growth_score || 0,
+                    pump_lp_growth_score: ti.pump_lp_growth_score || 0,
+                    backend_buy_available: !!ti.backend_buy_available,
                     // Liquidity
                     liquidity_usd: p.liquidity_usd || 0,
                     has_liquidity: (p.liquidity_usd || 0) >= parseFloat(setMinLiq.value || 5000),
@@ -942,6 +1075,14 @@
 
         if (state.native_price_usd) {
             statPrice.textContent = "$" + state.native_price_usd;
+        }
+
+        // v4: Sync dashboard data
+        if (state.metrics_dashboard) {
+            updateDashboard(state.metrics_dashboard);
+        }
+        if (state.resource_stats) {
+            updateResourceBar(state.resource_stats);
         }
     }
 
@@ -1672,6 +1813,255 @@
     });
 
     /* ═══════════════════════════════════════════════════════════════
+     *  v4: Performance Dashboard
+     * ═══════════════════════════════════════════════════════════════ */
+
+    /** Initialize Chart.js charts once */
+    function initDashboardCharts() {
+        if (typeof Chart === "undefined") return;
+
+        const commonCfg = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: "#848e9c", font: { size: 9 } }, grid: { color: "rgba(255,255,255,.06)" } },
+                y: { ticks: { color: "#848e9c", font: { size: 9 } }, grid: { color: "rgba(255,255,255,.06)" } },
+            },
+        };
+
+        const pnlCanvas = document.getElementById("chart-pnl-hourly");
+        if (pnlCanvas) {
+            chartPnl = new Chart(pnlCanvas.getContext("2d"), {
+                type: "bar",
+                data: { labels: [], datasets: [{ label: "P&L USD", data: [], backgroundColor: [] }] },
+                options: { ...commonCfg },
+            });
+        }
+
+        const detCanvas = document.getElementById("chart-detections-hourly");
+        if (detCanvas) {
+            chartDetections = new Chart(detCanvas.getContext("2d"), {
+                type: "line",
+                data: { labels: [], datasets: [{ label: "Detecciones", data: [], borderColor: "#f0b90b", backgroundColor: "rgba(240,185,11,.15)", fill: true, tension: 0.3, pointRadius: 2 }] },
+                options: { ...commonCfg },
+            });
+        }
+    }
+
+    /** Update the full dashboard from backend metrics_dashboard payload */
+    function updateDashboard(dash) {
+        if (!dash) return;
+
+        // KPI cards
+        const ts = dash.trade_stats || {};
+        const ds = dash.detection_stats || {};
+
+        if (kpiTrades)     kpiTrades.textContent     = ts.total_trades || 0;
+        if (kpiWinRate)    kpiWinRate.textContent     = (ts.win_rate || 0).toFixed(1) + "%";
+        if (kpiPnl)        kpiPnl.textContent         = "$" + (ts.total_pnl || 0).toFixed(2);
+        if (kpiDetections) kpiDetections.textContent   = ds.total_detections || 0;
+        if (kpiFilterRate) kpiFilterRate.textContent   = (ds.filter_rate || 0).toFixed(1) + "%";
+        if (kpiAvgSpeed)   kpiAvgSpeed.textContent     = (ds.avg_detection_ms || 0).toFixed(0) + "ms";
+
+        // Effectiveness grid
+        const eff = dash.effectiveness || {};
+        if (effSafe)      effSafe.textContent      = (eff.safe_token_pct || 0).toFixed(1) + "%";
+        if (effAvgGain)   effAvgGain.textContent   = "+" + (eff.avg_gain_pct || 0).toFixed(1) + "%";
+        if (effAvgLoss)   effAvgLoss.textContent   = (eff.avg_loss_pct || 0).toFixed(1) + "%";
+        if (effTxFail)    effTxFail.textContent     = (eff.tx_failure_pct || 0).toFixed(1) + "%";
+        if (effAvgHold)   effAvgHold.textContent    = (eff.avg_hold_minutes || 0).toFixed(0) + "m";
+        if (effBestTrade) effBestTrade.textContent   = "+" + (eff.best_trade_pct || 0).toFixed(1) + "%";
+
+        // Color effectiveness values
+        [effAvgGain, effBestTrade].forEach(el => { if (el) { el.classList.remove("negative"); el.classList.add("positive"); } });
+        [effAvgLoss].forEach(el => { if (el) { el.classList.remove("positive"); el.classList.add("negative"); } });
+
+        // Resource bar from dashboard
+        if (dash.resource_stats) updateResourceBar(dash.resource_stats);
+
+        // Hourly charts
+        const hourly = dash.hourly_series || {};
+        if (chartPnl && hourly.labels) {
+            chartPnl.data.labels = hourly.labels;
+            chartPnl.data.datasets[0].data = hourly.pnl || [];
+            chartPnl.data.datasets[0].backgroundColor = (hourly.pnl || []).map(v => v >= 0 ? "#02c076" : "#f6465d");
+            chartPnl.update("none");
+        }
+        if (chartDetections && hourly.labels) {
+            chartDetections.data.labels = hourly.labels;
+            chartDetections.data.datasets[0].data = hourly.detections || [];
+            chartDetections.update("none");
+        }
+    }
+
+    /** Update the resource monitor bar */
+    function updateResourceBar(rs) {
+        if (!rs) return;
+        if (resMemory) resMemory.textContent = (rs.memory_rss_mb || 0).toFixed(0) + " MB";
+        if (resCpu)    resCpu.textContent    = (rs.cpu_percent || 0).toFixed(0) + "%";
+        if (resTokens) resTokens.textContent = rs.tokens_processed || 0;
+        if (resWs)     resWs.textContent     = rs.ws_connections || 0;
+        if (resRpc)    resRpc.textContent    = rs.rpc_calls || 0;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+     *  v4: User Profile Presets
+     * ═══════════════════════════════════════════════════════════════ */
+
+    const profilePresets = {
+        novato: {
+            min_liquidity_usd: 10000, max_buy_tax: 5, max_sell_tax: 10,
+            buy_amount_native: 0.02, take_profit: 30, stop_loss: 10,
+            slippage: 12, only_safe: true, auto_buy: false,
+            max_hold_hours: 2, max_concurrent: 3, block_range: 5, poll_interval: 2,
+        },
+        intermedio: {
+            min_liquidity_usd: 5000, max_buy_tax: 10, max_sell_tax: 15,
+            buy_amount_native: 0.05, take_profit: 40, stop_loss: 15,
+            slippage: 12, only_safe: true, auto_buy: false,
+            max_hold_hours: 6, max_concurrent: 5, block_range: 5, poll_interval: 1.5,
+        },
+        avanzado: {
+            min_liquidity_usd: 2000, max_buy_tax: 15, max_sell_tax: 20,
+            buy_amount_native: 0.1, take_profit: 60, stop_loss: 20,
+            slippage: 15, only_safe: false, auto_buy: true,
+            max_hold_hours: 12, max_concurrent: 10, block_range: 10, poll_interval: 1,
+        },
+    };
+
+    function applyProfile(name) {
+        const preset = profilePresets[name];
+        if (!preset) return;
+        if (setMinLiq)        setMinLiq.value        = preset.min_liquidity_usd;
+        if (setMaxBuyTax)     setMaxBuyTax.value     = preset.max_buy_tax;
+        if (setMaxSellTax)    setMaxSellTax.value    = preset.max_sell_tax;
+        if (setBuyAmount)     setBuyAmount.value     = preset.buy_amount_native;
+        if (setTP)            setTP.value            = preset.take_profit;
+        if (setSL)            setSL.value            = preset.stop_loss;
+        if (setSlippage)      setSlippage.value      = preset.slippage;
+        if (setMaxHold)       setMaxHold.value       = preset.max_hold_hours;
+        if (setOnlySafe)      setOnlySafe.checked    = preset.only_safe;
+        if (setAutoBuy)       setAutoBuy.checked     = preset.auto_buy;
+        if (setMaxConcurrent) setMaxConcurrent.value = preset.max_concurrent;
+        if (setBlockRange)    setBlockRange.value    = preset.block_range;
+        if (setPollInterval)  setPollInterval.value  = preset.poll_interval;
+
+        // Update active button
+        document.querySelectorAll(".profile-btn").forEach(b => b.classList.remove("active"));
+        const btn = document.querySelector(`.profile-btn[data-profile="${name}"]`);
+        if (btn) btn.classList.add("active");
+
+        // Update description
+        const descEl = document.getElementById("profile-desc");
+        const descs = {
+            novato: "Configuración conservadora — solo tokens seguros, bajo riesgo.",
+            intermedio: "Balance entre seguridad y oportunidad — configuración recomendada.",
+            avanzado: "Configuración agresiva — más riesgo, auto-buy activo.",
+        };
+        if (descEl) descEl.textContent = descs[name] || "";
+
+        addFeed(`👤 Perfil "${name}" aplicado — guarda los settings para confirmar.`, "system");
+    }
+
+    document.querySelectorAll(".profile-btn").forEach(btn => {
+        btn.addEventListener("click", () => applyProfile(btn.dataset.profile));
+    });
+
+    /* ═══════════════════════════════════════════════════════════════
+     *  v4: Tutorial Overlay
+     * ═══════════════════════════════════════════════════════════════ */
+
+    function initTutorial() {
+        if (!tutorialOverlay) return;
+        // Check localStorage
+        if (localStorage.getItem("sniper_tutorial_done") === "1") {
+            tutorialOverlay.style.display = "none";
+            return;
+        }
+
+        let currentStep = 0;
+        const steps = tutorialOverlay.querySelectorAll(".tutorial-step");
+        const dots  = tutorialOverlay.querySelectorAll(".tutorial-dot");
+        const prevBtn = tutorialOverlay.querySelector(".tutorial-prev");
+        const nextBtn = tutorialOverlay.querySelector(".tutorial-next");
+        const closeBtn = tutorialOverlay.querySelector(".tutorial-close");
+        const noShow  = tutorialOverlay.querySelector("#tutorial-no-show");
+
+        function showStep(idx) {
+            currentStep = Math.max(0, Math.min(idx, steps.length - 1));
+            steps.forEach((s, i) => s.classList.toggle("active", i === currentStep));
+            dots.forEach((d, i) => d.classList.toggle("active", i === currentStep));
+            if (prevBtn) prevBtn.style.visibility = currentStep === 0 ? "hidden" : "visible";
+            if (nextBtn) nextBtn.textContent = currentStep === steps.length - 1 ? "✅ Empezar" : "Siguiente →";
+        }
+
+        if (prevBtn) prevBtn.addEventListener("click", () => showStep(currentStep - 1));
+        if (nextBtn) nextBtn.addEventListener("click", () => {
+            if (currentStep >= steps.length - 1) {
+                closeTutorial();
+            } else {
+                showStep(currentStep + 1);
+            }
+        });
+
+        function closeTutorial() {
+            tutorialOverlay.style.display = "none";
+            if (noShow && noShow.checked) {
+                localStorage.setItem("sniper_tutorial_done", "1");
+            }
+        }
+
+        if (closeBtn) closeBtn.addEventListener("click", closeTutorial);
+        tutorialOverlay.addEventListener("click", (e) => {
+            if (e.target === tutorialOverlay) closeTutorial();
+        });
+
+        showStep(0);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+     *  v4: Alert Configuration
+     * ═══════════════════════════════════════════════════════════════ */
+
+    function initAlertConfig() {
+        const telegramToggle = $("alert-telegram");
+        const discordToggle  = $("alert-discord");
+        const emailToggle    = $("alert-email");
+
+        function syncAlertConfig() {
+            const config = {
+                telegram_enabled: telegramToggle ? telegramToggle.checked : false,
+                discord_enabled:  discordToggle  ? discordToggle.checked  : false,
+                email_enabled:    emailToggle    ? emailToggle.checked    : false,
+            };
+            sendWS({ action: "update_alert_config", config });
+        }
+
+        if (telegramToggle) telegramToggle.addEventListener("change", syncAlertConfig);
+        if (discordToggle)  discordToggle.addEventListener("change", syncAlertConfig);
+        if (emailToggle)    emailToggle.addEventListener("change", syncAlertConfig);
+    }
+
+    // Dashboard refresh button
+    if (btnRefreshDash) {
+        btnRefreshDash.addEventListener("click", () => {
+            sendWS({ action: "get_dashboard" });
+            addFeed("📊 Refreshing dashboard…", "system");
+        });
+    }
+
+    // Auto-refresh dashboard every 30s
+    function startDashboardAutoRefresh() {
+        if (_dashboardTimer) clearInterval(_dashboardTimer);
+        _dashboardTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN && botRunning) {
+                sendWS({ action: "get_dashboard" });
+            }
+        }, 30000);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
      *  Init
      * ═══════════════════════════════════════════════════════════════ */
     (async () => {
@@ -1681,6 +2071,12 @@
             walletBadge.classList.add("connected");
         }
     })();
+
+    // v4 init
+    initDashboardCharts();
+    initTutorial();
+    initAlertConfig();
+    startDashboardAutoRefresh();
 
     connectWS();
 })();

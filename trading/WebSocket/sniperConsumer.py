@@ -87,11 +87,27 @@ class SniperConsumer(AsyncWebsocketConsumer):
             if self.bot:
                 token_addr = msg.get("token", "")
                 sell_tx    = msg.get("sell_tx", "")
-                sold = self.bot.mark_snipe_sold(token_addr, sell_tx)
+                sell_price = float(msg.get("sell_price", 0))
+                sold = self.bot.mark_snipe_sold(token_addr, sell_tx, sell_price)
                 if sold:
                     await self._send_event("snipe_sold", sold)
                 else:
                     await self._send_event("error", {"message": "Position not found"})
+            else:
+                await self._send_event("error", {"message": "Bot not running"})
+
+        elif action == "get_dashboard":
+            if self.bot:
+                dashboard = self.bot.metrics_service.get_dashboard()
+                await self._send_event("dashboard", dashboard)
+            else:
+                await self._send_event("error", {"message": "Bot not running"})
+
+        elif action == "update_alert_config":
+            if self.bot:
+                config = msg.get("config", {})
+                self.bot.alert_service.update_config(config)
+                await self._send_event("alert_config_updated", self.bot.alert_service.config)
             else:
                 await self._send_event("error", {"message": "Bot not running"})
 

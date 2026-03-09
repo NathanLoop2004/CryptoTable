@@ -79,39 +79,50 @@
                 </button>
             </div>
 
+            <!-- v4: User Profile Selector -->
+            <div class="sniper-card">
+                <h3 class="sc-title">👤 Perfil</h3>
+                <div class="profile-select-group">
+                    <button class="profile-btn" data-profile="novato" title="Configuración conservadora: máxima seguridad, menores riesgos">🟢 Novato</button>
+                    <button class="profile-btn active" data-profile="intermedio" title="Balance entre seguridad y oportunidades">🟡 Intermedio</button>
+                    <button class="profile-btn" data-profile="avanzado" title="Configuración agresiva: más oportunidades, mayor riesgo">🔴 Avanzado</button>
+                </div>
+                <p class="profile-desc" id="profile-desc">Balance entre seguridad y oportunidades de snipe.</p>
+            </div>
+
             <!-- Settings -->
             <div class="sniper-card">
                 <h3 class="sc-title">⚙️ Settings</h3>
                 <div class="setting-row">
-                    <label>Min Liquidity (USD)</label>
+                    <label>Min Liquidity (USD) <span class="tooltip-icon" title="Liquidez mínima del par DEX para considerar el token. Menor = más tokens pero más riesgo.">ⓘ</span></label>
                     <input type="number" id="set-min-liq" class="sniper-input" value="5000" step="1000">
                 </div>
                 <div class="setting-row">
-                    <label>Max Buy Tax (%)</label>
+                    <label>Max Buy Tax (%) <span class="tooltip-icon" title="Impuesto máximo al comprar. Si es mayor, se rechaza el token. Normal: 0-5%, sospechoso: >10%.">ⓘ</span></label>
                     <input type="number" id="set-max-buy-tax" class="sniper-input" value="10" step="1">
                 </div>
                 <div class="setting-row">
-                    <label>Max Sell Tax (%)</label>
+                    <label>Max Sell Tax (%) <span class="tooltip-icon" title="Impuesto máximo al vender. Si sell tax = 99-100% es un honeypot garantizado.">ⓘ</span></label>
                     <input type="number" id="set-max-sell-tax" class="sniper-input" value="15" step="1">
                 </div>
                 <div class="setting-row">
-                    <label>Buy Amount (native)</label>
+                    <label>Buy Amount (native) <span class="tooltip-icon" title="Cantidad de BNB/ETH por cada compra automática. Empieza pequeño (0.01-0.05).">ⓘ</span></label>
                     <input type="number" id="set-buy-amount" class="sniper-input" value="0.05" step="0.01">
                 </div>
                 <div class="setting-row">
-                    <label>Take Profit (%)</label>
+                    <label>Take Profit (%) <span class="tooltip-icon" title="Porcentaje de ganancia para venta automática. Ej: 40% = vende si sube un 40%.">ⓘ</span></label>
                     <input type="number" id="set-tp" class="sniper-input" value="40" step="5">
                 </div>
                 <div class="setting-row">
-                    <label>Stop Loss (%)</label>
+                    <label>Stop Loss (%) <span class="tooltip-icon" title="Porcentaje de pérdida para venta automática. Ej: 20% = vende si baja un 20%.">ⓘ</span></label>
                     <input type="number" id="set-sl" class="sniper-input" value="20" step="5">
                 </div>
                 <div class="setting-row">
-                    <label>Slippage (%)</label>
+                    <label>Slippage (%) <span class="tooltip-icon" title="Deslizamiento tolerado en swaps. Mayor slippage = más probabilidad de ejecución pero peor precio.">ⓘ</span></label>
                     <input type="number" id="set-slippage" class="sniper-input" value="12" step="1">
                 </div>
                 <div class="setting-row">
-                    <label>Max Hold (horas)</label>
+                    <label>Max Hold (horas) <span class="tooltip-icon" title="Tiempo máximo de holding. 0 = sin límite. Se calcula automáticamente según el LP lock.">ⓘ</span></label>
                     <input type="number" id="set-max-hold" class="sniper-input" value="0" step="1" min="0" title="0 = sin límite. Ej: 23 = vender antes de 24h de lock">
                 </div>
                 <div class="setting-row toggle-row">
@@ -144,6 +155,36 @@
                 </div>
 
                 <button class="btn-sniper btn-save-settings" id="btn-save-settings">💾 Save Settings</button>
+            </div>
+
+            <!-- v4: Alert Configuration -->
+            <div class="sniper-card">
+                <h3 class="sc-title">🔔 Alertas</h3>
+                <div class="setting-row toggle-row">
+                    <label>Telegram <span class="tooltip-icon" title="Recibe alertas en tu chat/grupo de Telegram via Bot API.">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="alert-telegram">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>Discord <span class="tooltip-icon" title="Recibe alertas en tu canal Discord via webhook.">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="alert-discord">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>Email <span class="tooltip-icon" title="Recibe alertas críticas por email (errores, rugs detectados).">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="alert-email">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="alert-stats-mini">
+                    <span>📩 Alerts: <span id="alert-count">0</span></span>
+                    <span>⏱️ Rate-limited: <span id="alert-rate-limited">0</span></span>
+                </div>
             </div>
         </div>
 
@@ -189,6 +230,91 @@
                         <div class="pipe-label">Profit</div>
                         <div class="pipe-count" id="pipe-profit-count">—</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- ═══ v4: Performance Dashboard ═══ -->
+            <div class="sniper-card dashboard-card" id="metrics-dashboard">
+                <div class="sc-title-row">
+                    <h3 class="sc-title">📊 Performance Dashboard</h3>
+                    <button class="btn-sniper btn-sm" id="btn-refresh-dashboard" title="Refresh metrics">🔄</button>
+                </div>
+
+                <!-- KPI Cards Row -->
+                <div class="kpi-row">
+                    <div class="kpi-card kpi-trades">
+                        <div class="kpi-value" id="kpi-total-trades">0</div>
+                        <div class="kpi-label">Total Trades</div>
+                    </div>
+                    <div class="kpi-card kpi-winrate">
+                        <div class="kpi-value" id="kpi-win-rate">0%</div>
+                        <div class="kpi-label">Win Rate</div>
+                    </div>
+                    <div class="kpi-card kpi-pnl">
+                        <div class="kpi-value" id="kpi-total-pnl">$0.00</div>
+                        <div class="kpi-label">Total P&L</div>
+                    </div>
+                    <div class="kpi-card kpi-detections">
+                        <div class="kpi-value" id="kpi-detections">0</div>
+                        <div class="kpi-label">Tokens Analyzed</div>
+                    </div>
+                    <div class="kpi-card kpi-filter">
+                        <div class="kpi-value" id="kpi-filter-rate">0%</div>
+                        <div class="kpi-label">Filter Rate</div>
+                    </div>
+                    <div class="kpi-card kpi-speed">
+                        <div class="kpi-value" id="kpi-avg-speed">0ms</div>
+                        <div class="kpi-label">Avg Analysis</div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="dashboard-charts">
+                    <div class="dash-chart-box">
+                        <h4 class="dash-chart-title">📈 P&L por Hora</h4>
+                        <canvas id="chart-pnl-hourly" height="160"></canvas>
+                    </div>
+                    <div class="dash-chart-box">
+                        <h4 class="dash-chart-title">🔍 Detecciones por Hora</h4>
+                        <canvas id="chart-detections-hourly" height="160"></canvas>
+                    </div>
+                </div>
+
+                <!-- Effectiveness Summary -->
+                <div class="effectiveness-grid">
+                    <div class="eff-item">
+                        <span class="eff-label">Avg Gain</span>
+                        <span class="eff-value positive" id="eff-avg-gain">+0%</span>
+                    </div>
+                    <div class="eff-item">
+                        <span class="eff-label">Avg Loss</span>
+                        <span class="eff-value negative" id="eff-avg-loss">-0%</span>
+                    </div>
+                    <div class="eff-item">
+                        <span class="eff-label">Risk/Reward</span>
+                        <span class="eff-value" id="eff-risk-reward">0:1</span>
+                    </div>
+                    <div class="eff-item">
+                        <span class="eff-label">Rugs Detected</span>
+                        <span class="eff-value" id="eff-rugs">0</span>
+                    </div>
+                    <div class="eff-item">
+                        <span class="eff-label">Alerts Total</span>
+                        <span class="eff-value" id="eff-alerts">0</span>
+                    </div>
+                    <div class="eff-item">
+                        <span class="eff-label">Uptime</span>
+                        <span class="eff-value" id="eff-uptime">0m</span>
+                    </div>
+                </div>
+
+                <!-- Resource Monitor Bar -->
+                <div class="resource-bar" id="resource-bar">
+                    <span class="res-item">🖥️ MEM: <span id="res-mem">—</span></span>
+                    <span class="res-item">⚡ CPU: <span id="res-cpu">—</span></span>
+                    <span class="res-item">📡 WS: <span id="res-ws">0</span></span>
+                    <span class="res-item">🔗 RPC: <span id="res-rpc">0</span></span>
+                    <span class="res-item">🎯 Tokens/min: <span id="res-tpm">0</span></span>
                 </div>
             </div>
 
@@ -373,9 +499,63 @@
         </div>
     </div>
 </div>
+
+<!-- ═══ v4: Tutorial Overlay ═══ -->
+<div class="tutorial-overlay" id="tutorial-overlay" style="display:none;">
+    <div class="tutorial-card">
+        <div class="tutorial-header">
+            <h2>🎯 Bienvenido al Sniper Bot</h2>
+            <button class="tutorial-close" id="tutorial-close">✕</button>
+        </div>
+        <div class="tutorial-steps" id="tutorial-steps">
+            <div class="tutorial-step active" data-step="1">
+                <div class="tutorial-step-icon">🔗</div>
+                <h3>1. Conecta tu Wallet</h3>
+                <p>Conecta Trust Wallet o MetaMask haciendo click en el botón de wallet arriba a la derecha. Necesitas tener BNB/ETH para hacer trades.</p>
+            </div>
+            <div class="tutorial-step" data-step="2">
+                <div class="tutorial-step-icon">⚙️</div>
+                <h3>2. Configura los Settings</h3>
+                <p>Elige tu <strong>perfil</strong> (Novato = seguro, Avanzado = agresivo). Ajusta la liquidez mínima, buy amount y take profit/stop loss. Los tooltips ⓘ te explican cada opción.</p>
+            </div>
+            <div class="tutorial-step" data-step="3">
+                <div class="tutorial-step-icon">▶️</div>
+                <h3>3. Inicia el Bot</h3>
+                <p>Selecciona la cadena (BSC o ETH) y pulsa <strong>Start</strong>. El bot escaneará nuevos tokens en tiempo real a través del pipeline de análisis.</p>
+            </div>
+            <div class="tutorial-step" data-step="4">
+                <div class="tutorial-step-icon">🔍</div>
+                <h3>4. Revisa los Tokens</h3>
+                <p>Los tokens detectados aparecen en <strong>Detectados</strong>. Verás el riesgo, taxes, liquidez y flags de seguridad. Solo los tokens que pasan TODOS los filtros aparecen como oportunidad de snipe.</p>
+            </div>
+            <div class="tutorial-step" data-step="5">
+                <div class="tutorial-step-icon">💰</div>
+                <h3>5. Ejecuta Trades</h3>
+                <p>Cuando aparece una <strong>Snipe Opportunity</strong>, puedes comprar manualmente o activar <strong>Auto-Buy</strong>. Tus posiciones se muestran en la tabla de posiciones activas.</p>
+            </div>
+            <div class="tutorial-step" data-step="6">
+                <div class="tutorial-step-icon">📊</div>
+                <h3>6. Monitorea el Dashboard</h3>
+                <p>El <strong>Performance Dashboard</strong> muestra tu P&L, win rate, velocidad de detección y efectividad del bot en tiempo real. Configura alertas de Telegram/Discord para no perder oportunidades.</p>
+            </div>
+        </div>
+        <div class="tutorial-nav">
+            <button class="btn-sniper" id="tutorial-prev" disabled>← Anterior</button>
+            <span class="tutorial-dots" id="tutorial-dots"></span>
+            <button class="btn-sniper btn-start" id="tutorial-next">Siguiente →</button>
+        </div>
+        <div class="tutorial-footer">
+            <label class="tutorial-no-show">
+                <input type="checkbox" id="tutorial-no-show-check">
+                No mostrar de nuevo
+            </label>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js" crossorigin="anonymous"></script>
 <script src="{% static 'js/transactions.js' %}"></script>
 <script src="{% static 'js/walletConnect.js' %}"></script>

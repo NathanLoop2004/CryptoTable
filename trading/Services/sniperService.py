@@ -1,18 +1,25 @@
 """
 sniperService.py — Core sniper bot service.
 
-Architecture (Professional v2):
+Architecture (Professional v4):
   mempool listener → pre-launch detector → token detector → contract analyzer
-  → swap simulator → pump analyzer → smart money tracker
-  → liquidity detector → sniper engine → rug detector → profit manager
+  → swap simulator → pump analyzer → smart money tracker → dev tracker
+  → risk engine → trade executor → rug detector → profit manager
+  → resource monitor → alert service → metrics service
 
 Modules:
-  pumpAnalyzer.py      — Pump score engine (0–100)
+  pumpAnalyzer.py      — Advanced pump score engine v3 (0–100, 10 components)
   swapSimulator.py     — On-chain honeypot detection via eth_call
   mempoolService.py    — Mempool pending tx listener
   rugDetector.py       — Post-buy rug pull monitoring
   preLaunchDetector.py — Pre-launch token detection
   smartMoneyTracker.py — Whale wallet tracking
+  devTracker.py        — Developer reputation tracker (v3)
+  riskEngine.py        — Unified risk scoring engine (v3)
+  tradeExecutor.py     — Backend trade execution engine (v3)
+  resourceMonitor.py   — Memory/CPU/WS/RPC monitoring (NEW v4)
+  alertService.py      — Telegram/Discord/Email alerts (NEW v4)
+  metricsService.py    — Performance metrics & P&L tracking (NEW v4)
 
 Uses web3.py to interact with BSC (or other EVM chains) via WebSocket RPC.
 Runs as an async background task inside Django Channels.
@@ -37,6 +44,14 @@ from trading.Services.mempoolService import MempoolListener, MempoolEvent
 from trading.Services.rugDetector import RugDetector, RugAlert
 from trading.Services.preLaunchDetector import PreLaunchDetector, PreLaunchToken
 from trading.Services.smartMoneyTracker import SmartMoneyTracker, SmartMoneySignal
+# ── Professional v3 modules ──
+from trading.Services.devTracker import DevTracker, DevCheckResult
+from trading.Services.riskEngine import RiskEngine, RiskDecision
+from trading.Services.tradeExecutor import TradeExecutor, TradeResult
+# ── Professional v4 modules ──
+from trading.Services.resourceMonitor import ResourceMonitor
+from trading.Services.alertService import AlertService
+from trading.Services.metricsService import MetricsService, TradeRecord, DetectionEvent
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +259,33 @@ class TokenInfo:
     # ── Smart Money ──
     smart_money_buyers: int = 0
     smart_money_confidence: int = 0
+    # ── v3: Dev Tracker ──
+    dev_is_tracked: bool = False
+    dev_score: int = 0
+    dev_label: str = ""
+    dev_total_launches: int = 0
+    dev_successful_launches: int = 0
+    dev_rug_pulls: int = 0
+    dev_best_multiplier: float = 0.0
+    dev_is_serial_scammer: bool = False
+    _dev_ok: bool = False
+    # ── v3: Risk Engine ──
+    risk_engine_score: int = 0
+    risk_engine_action: str = ""           # STRONG_BUY / BUY / WATCH / WEAK / IGNORE
+    risk_engine_confidence: float = 0.0
+    risk_engine_hard_stop: bool = False
+    risk_engine_hard_stop_reason: str = ""
+    risk_engine_signals: list = field(default_factory=list)
+    _risk_engine_ok: bool = False
+    # ── v3: Trade Executor ──
+    backend_buy_available: bool = False
+    # ── v3: Pump Analyzer extras ──
+    pump_mcap_score: int = 0
+    pump_market_cap_usd: float = 0.0
+    pump_holder_growth_rate: float = 0.0
+    pump_lp_growth_percent: float = 0.0
+    pump_holder_growth_score: int = 0
+    pump_lp_growth_score: int = 0
     # API tracking — did we actually get data?
     _goplus_ok: bool = False
     _honeypot_ok: bool = False
@@ -986,6 +1028,12 @@ class SniperBot:
             "enable_prelaunch": True,    # pre-launch detection
             "enable_smart_money": True,  # whale tracking
             "min_pump_score": 40,        # minimum pump score to buy
+            # ── v3 Professional modules (toggles) ──
+            "enable_dev_tracker": True,  # developer reputation tracking
+            "enable_risk_engine": True,  # unified risk scoring
+            "enable_trade_executor": False,  # backend trade execution (requires SNIPER_PRIVATE_KEY)
+            "risk_engine_min_score": 50, # minimum risk engine score to buy
+            "risk_engine_auto_action": "BUY",  # minimum action to auto-buy (STRONG_BUY / BUY)
         }
 
         # State
@@ -1038,6 +1086,18 @@ class SniperBot:
             FACTORY_ADDRESSES.get(chain_id, ""),
         ) if self.router_addr else None
         self.smart_money = SmartMoneyTracker(self.w3, chain_id)
+
+        # ── Professional v3 modules ──
+        self.dev_tracker = DevTracker(self.w3, chain_id)
+        self.risk_engine = RiskEngine()
+        self.trade_executor = TradeExecutor(
+            self.w3, chain_id, self.router_addr, self.weth, self._rpc_list
+        ) if self.router_addr and self.weth else None
+
+        # ── Professional v4 modules ──
+        self.resource_monitor = ResourceMonitor()
+        self.alert_service = AlertService()
+        self.metrics_service = MetricsService()
 
         # Background task handles for professional modules
         self._mempool_task: asyncio.Task | None = None
@@ -1226,6 +1286,34 @@ class SniperBot:
             # Smart Money
             "smart_money_buyers": info.smart_money_buyers,
             "smart_money_confidence": info.smart_money_confidence,
+            # ── Professional v3 data ──
+            # Dev Tracker
+            "dev_is_tracked": info.dev_is_tracked,
+            "dev_score": info.dev_score,
+            "dev_label": info.dev_label,
+            "dev_total_launches": info.dev_total_launches,
+            "dev_successful_launches": info.dev_successful_launches,
+            "dev_rug_pulls": info.dev_rug_pulls,
+            "dev_best_multiplier": info.dev_best_multiplier,
+            "dev_is_serial_scammer": info.dev_is_serial_scammer,
+            "dev_ok": info._dev_ok,
+            # Risk Engine
+            "risk_engine_score": info.risk_engine_score,
+            "risk_engine_action": info.risk_engine_action,
+            "risk_engine_confidence": info.risk_engine_confidence,
+            "risk_engine_hard_stop": info.risk_engine_hard_stop,
+            "risk_engine_hard_stop_reason": info.risk_engine_hard_stop_reason,
+            "risk_engine_signals": list(info.risk_engine_signals),
+            "risk_engine_ok": info._risk_engine_ok,
+            # Pump v3 extras
+            "pump_mcap_score": info.pump_mcap_score,
+            "pump_market_cap_usd": info.pump_market_cap_usd,
+            "pump_holder_growth_rate": info.pump_holder_growth_rate,
+            "pump_lp_growth_percent": info.pump_lp_growth_percent,
+            "pump_holder_growth_score": info.pump_holder_growth_score,
+            "pump_lp_growth_score": info.pump_lp_growth_score,
+            # Trade Executor availability
+            "backend_buy_available": info.backend_buy_available,
         }
 
     # ─── Refresh detected tokens (periodic re-check) ───────
@@ -1390,6 +1478,7 @@ class SniperBot:
 
     async def _process_pair(self, pair_address: str, token0: str, token1: str, block: int):
         """Internal: full analysis pipeline for one pair."""
+        _pipeline_start = time.time()
         weth_lower = self.weth.lower()
 
         if token0.lower() == weth_lower:
@@ -1531,19 +1620,112 @@ class SniperBot:
                             max(s.confidence for s in result) / 100.0 if result else 0.0
                         )
 
-                # Re-emit token_detected with updated v2 data
+                # ── Professional v3: populate pump v3 extra fields ──
+                if self.settings.get("enable_pump_score", True) and token_info.pump_score > 0:
+                    # Re-fetch the pump result to extract v3 fields
+                    try:
+                        pump_result = await self.pump_analyzer.analyze(token_info, usd_liq, pair_address)
+                        if pump_result:
+                            token_info.pump_mcap_score = pump_result.mcap_score
+                            token_info.pump_market_cap_usd = pump_result.market_cap_usd
+                            token_info.pump_holder_growth_rate = pump_result.holder_growth_rate
+                            token_info.pump_lp_growth_percent = pump_result.lp_growth_percent
+                            token_info.pump_holder_growth_score = pump_result.holder_growth_score
+                            token_info.pump_lp_growth_score = pump_result.lp_growth_score
+                    except Exception as e:
+                        logger.debug(f"v3 pump extras failed for {token_info.symbol}: {e}")
+
+                # ── Professional v3: Dev Tracker ──
+                dev_result = None
+                if self.settings.get("enable_dev_tracker", True):
+                    try:
+                        dev_result = await self.dev_tracker.check_creator(new_token, token_info)
+                        if dev_result:
+                            token_info.dev_is_tracked = dev_result.is_tracked
+                            token_info.dev_score = dev_result.dev_score
+                            token_info.dev_label = dev_result.dev_label
+                            token_info.dev_total_launches = dev_result.total_launches if hasattr(dev_result, 'total_launches') else 0
+                            token_info.dev_successful_launches = dev_result.successful_launches if hasattr(dev_result, 'successful_launches') else 0
+                            token_info.dev_rug_pulls = dev_result.rug_pulls if hasattr(dev_result, 'rug_pulls') else 0
+                            token_info.dev_best_multiplier = dev_result.best_multiplier if hasattr(dev_result, 'best_multiplier') else 0.0
+                            token_info.dev_is_serial_scammer = dev_result.is_serial_scammer
+                            token_info._dev_ok = True
+                            # Record this launch for future reputation
+                            await self.dev_tracker.record_launch(
+                                dev_result.creator_address, new_token,
+                                token_info.symbol, usd_liq,
+                                token_info.lp_locked,
+                            )
+                    except Exception as e:
+                        logger.warning(f"v3 dev tracker failed for {token_info.symbol}: {e}")
+
+                # ── Professional v3: Risk Engine ──
+                risk_decision = None
+                if self.settings.get("enable_risk_engine", True):
+                    try:
+                        # Gather results for risk engine (use what we have)
+                        pump_for_risk = None
+                        if token_info.pump_score > 0:
+                            pump_for_risk = type('PumpResult', (), {
+                                'total_score': token_info.pump_score,
+                                'grade': token_info.pump_grade,
+                            })()
+                        sim_for_risk = None
+                        if token_info._simulation_ok:
+                            sim_for_risk = type('SimResult', (), {
+                                'is_honeypot': token_info.sim_is_honeypot,
+                                'buy_tax_percent': token_info.sim_buy_tax,
+                                'sell_tax_percent': token_info.sim_sell_tax,
+                            })()
+                        bytecode_for_risk = None
+                        if token_info._bytecode_ok:
+                            bytecode_for_risk = {
+                                'has_selfdestruct': token_info.bytecode_has_selfdestruct,
+                                'has_delegatecall': token_info.bytecode_has_delegatecall,
+                                'is_minimal_proxy': token_info.bytecode_is_proxy,
+                                'risk_flags': token_info.bytecode_flags,
+                            }
+                        smart_for_risk = []
+
+                        risk_decision = await self.risk_engine.evaluate(
+                            token_info=token_info,
+                            pump_result=pump_for_risk,
+                            dev_result=dev_result,
+                            smart_signals=smart_for_risk,
+                            sim_result=sim_for_risk,
+                            bytecode_result=bytecode_for_risk,
+                            liquidity_usd=usd_liq,
+                        )
+                        if risk_decision:
+                            token_info.risk_engine_score = risk_decision.final_score
+                            token_info.risk_engine_action = risk_decision.action
+                            token_info.risk_engine_confidence = risk_decision.confidence
+                            token_info.risk_engine_hard_stop = risk_decision.hard_stop
+                            token_info.risk_engine_hard_stop_reason = risk_decision.hard_stop_reason if hasattr(risk_decision, 'hard_stop_reason') else ""
+                            token_info.risk_engine_signals = risk_decision.signals
+                            token_info._risk_engine_ok = True
+                    except Exception as e:
+                        logger.warning(f"v3 risk engine failed for {token_info.symbol}: {e}")
+
+                # Check trade executor availability
+                if self.settings.get("enable_trade_executor", False) and self.trade_executor:
+                    token_info.backend_buy_available = True
+
+                # Re-emit token_detected with updated v2+v3 data
                 await self._emit("token_detected",
                     self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
                 )
                 logger.info(
-                    f"v2 analysis for {token_info.symbol}: "
+                    f"v2+v3 analysis for {token_info.symbol}: "
                     f"pump={token_info.pump_score}({token_info.pump_grade}) "
                     f"sim_hp={token_info.sim_is_honeypot} "
                     f"bytecode_flags={token_info.bytecode_flags} "
-                    f"smart={token_info.smart_money_buyers}"
+                    f"smart={token_info.smart_money_buyers} "
+                    f"dev={token_info.dev_score}({token_info.dev_label}) "
+                    f"risk={token_info.risk_engine_score}({token_info.risk_engine_action})"
                 )
         except Exception as e:
-            logger.error(f"v2 analysis pipeline error for {token_info.symbol}: {e}")
+            logger.error(f"v2+v3 analysis pipeline error for {token_info.symbol}: {e}")
 
         # Check if safe enough
         passes_safety = True
@@ -1646,6 +1828,31 @@ class SniperBot:
                 passes_safety = False
                 logger.info(f"Skipping {token_info.symbol}: already pumped +{token_info.dexscreener_price_change_h1:.0f}% in 1h")
 
+        # ── Professional v3 safety gates ──
+        # Risk Engine hard stop — overrides everything
+        if token_info._risk_engine_ok and token_info.risk_engine_hard_stop:
+            passes_safety = False
+            logger.info(f"HARD STOP {token_info.symbol}: {token_info.risk_engine_hard_stop_reason}")
+
+        # Dev tracker — serial scammer block
+        if token_info._dev_ok and token_info.dev_is_serial_scammer:
+            passes_safety = False
+            logger.info(f"Skipping {token_info.symbol}: serial scammer dev ({token_info.dev_rug_pulls} past rugs)")
+
+        # Risk Engine score gate
+        if token_info._risk_engine_ok and self.settings.get("enable_risk_engine", True):
+            min_risk = self.settings.get("risk_engine_min_score", 50)
+            allowed_action = self.settings.get("risk_engine_auto_action", "BUY")
+            action_order = ["STRONG_BUY", "BUY", "WATCH", "WEAK", "IGNORE"]
+            allowed_idx = action_order.index(allowed_action) if allowed_action in action_order else 1
+            current_idx = action_order.index(token_info.risk_engine_action) if token_info.risk_engine_action in action_order else 4
+            if token_info.risk_engine_score < min_risk:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: risk engine score {token_info.risk_engine_score} < {min_risk}")
+            elif current_idx > allowed_idx:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: risk action {token_info.risk_engine_action} below threshold {allowed_action}")
+
         if passes_safety:
             # Auto-calculate max_hold from LP lock duration (sell 1h before expiry)
             auto_hold_h = 0
@@ -1664,7 +1871,73 @@ class SniperBot:
                 "lp_lock_hours": token_info.lp_lock_hours_remaining,
                 "lp_lock_percent": token_info.lp_lock_percent,
                 "auto_hold_hours": auto_hold_h,
+                # v3 extras
+                "risk_engine_score": token_info.risk_engine_score,
+                "risk_engine_action": token_info.risk_engine_action,
+                "dev_score": token_info.dev_score,
+                "dev_label": token_info.dev_label,
+                "backend_buy_available": token_info.backend_buy_available,
             })
+
+            # ── Professional v3: Backend auto-buy via TradeExecutor ──
+            if (self.settings.get("enable_trade_executor", False)
+                    and self.trade_executor
+                    and self.settings.get("auto_buy", False)
+                    and token_info.risk_engine_action in ("STRONG_BUY", "BUY")):
+                try:
+                    buy_amount = self.settings.get("buy_amount_native", 0.01)
+                    slippage = self.settings.get("slippage", 15)
+                    trade_result = await self.trade_executor.execute_buy(
+                        token_address=new_token,
+                        amount_native=buy_amount,
+                        slippage=slippage,
+                    )
+                    if trade_result and trade_result.success:
+                        await self._emit("backend_buy_executed", {
+                            "token": new_token,
+                            "symbol": token_info.symbol,
+                            "tx_hash": trade_result.tx_hash,
+                            "amount_native": buy_amount,
+                            "gas_used": trade_result.gas_used,
+                            "execution_ms": trade_result.execution_time_ms,
+                        })
+                        logger.info(f"🎯 Backend BUY executed for {token_info.symbol}: tx={trade_result.tx_hash}")
+                    elif trade_result:
+                        await self._emit("backend_buy_failed", {
+                            "token": new_token,
+                            "symbol": token_info.symbol,
+                            "error": trade_result.error,
+                        })
+                        logger.warning(f"Backend BUY failed for {token_info.symbol}: {trade_result.error}")
+                except Exception as e:
+                    logger.error(f"Backend trade executor error for {token_info.symbol}: {e}")
+
+        # ── v4: Record metrics for this detection ──
+        try:
+            _pipeline_ms = (time.time() - _pipeline_start) * 1000
+            self.resource_monitor.record_token_processed(_pipeline_ms)
+            detection = DetectionEvent(
+                token_address=new_token,
+                symbol=token_info.symbol if token_info else "?",
+                analysis_ms=_pipeline_ms,
+                result="passed" if passes_safety else "rejected",
+                rejection_reason="" if passes_safety else "safety_check",
+            )
+            self.metrics_service.record_detection(detection)
+
+            # Alert on suspicious tokens
+            if token_info and token_info.is_honeypot:
+                await self.alert_service.alert_token_suspicious(
+                    token_info.symbol, new_token,
+                    "Honeypot detected", "warning",
+                )
+            if token_info and token_info._risk_engine_ok and token_info.risk_engine_hard_stop:
+                await self.alert_service.alert_token_suspicious(
+                    token_info.symbol, new_token,
+                    f"Hard stop: {token_info.risk_engine_hard_stop_reason}", "error",
+                )
+        except Exception as e:
+            logger.debug(f"v4 metrics recording failed: {e}")
 
     # ═══════════════════════════════════════════════════════════
     #  Real-time Sync event listener via WebSocket
@@ -1987,6 +2260,21 @@ class SniperBot:
             self._prelaunch_task = asyncio.ensure_future(self.prelaunch_detector.run())
             await self._emit("scan_info", {"message": "🔍 Pre-launch detector launched"})
 
+        # ── Professional v3: module startup info ──
+        v3_modules = []
+        if self.settings.get("enable_dev_tracker", True):
+            tracked = len(self.dev_tracker._profiles) if hasattr(self.dev_tracker, '_profiles') else 0
+            v3_modules.append(f"DevTracker({tracked} devs)")
+        if self.settings.get("enable_risk_engine", True):
+            min_s = self.settings.get("risk_engine_min_score", 50)
+            v3_modules.append(f"RiskEngine(min={min_s})")
+        if self.settings.get("enable_trade_executor", False) and self.trade_executor:
+            v3_modules.append("TradeExecutor(ACTIVE)")
+        if self.settings.get("enable_pump_score", True):
+            v3_modules.append("PumpAnalyzer v3(10 components)")
+        if v3_modules:
+            await self._emit("scan_info", {"message": f"⚡ v3 modules: {', '.join(v3_modules)}"})
+
         price_tick = 0
         enrich_tick = 0           # Fast enrichment cycle (every ~3s)
         slow_tick = 0              # Full refresh cycle (every ~15s)
@@ -2029,6 +2317,11 @@ class SniperBot:
                         except Exception as e:
                             last_rpc_err = str(e)[:120]
                             logger.debug(f"RPC {self._rpc_list[self._rpc_index]} failed: {e}")
+                            # v4: record RPC error
+                            self.resource_monitor.record_rpc_call(
+                                (time.time() - _pipeline_start) * 1000 if '_pipeline_start' in dir() else 0,
+                                success=False,
+                            )
                             # Rotate to next RPC
                             self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                             new_rpc = self._rpc_list[self._rpc_index]
@@ -2070,6 +2363,11 @@ class SniperBot:
                         await self._emit("scan_error", {
                             "message": f"All RPCs failed for blocks {from_block}-{to_block}: {last_rpc_err}",
                         })
+                        # v4: alert on total RPC failure
+                        await self.alert_service.alert_rpc_error(
+                            self._rpc_list[self._rpc_index],
+                            last_rpc_err,
+                        )
 
                     last_block = to_block
                 else:
@@ -2251,6 +2549,29 @@ class SniperBot:
                 state["smart_money_stats"] = self.smart_money.get_stats()
         except Exception:
             pass
+        # v3 module stats
+        try:
+            if hasattr(self, 'dev_tracker'):
+                state["dev_tracker_stats"] = self.dev_tracker.get_stats()
+            if hasattr(self, 'risk_engine'):
+                state["risk_engine_stats"] = self.risk_engine.get_stats()
+            if hasattr(self, 'trade_executor') and self.trade_executor:
+                state["trade_executor_stats"] = self.trade_executor.get_stats()
+            if hasattr(self, 'pump_analyzer'):
+                state["pump_analyzer_stats"] = self.pump_analyzer.get_stats()
+        except Exception:
+            pass
+        # v4 module stats
+        try:
+            if hasattr(self, 'resource_monitor'):
+                state["resource_stats"] = self.resource_monitor.get_stats()
+            if hasattr(self, 'alert_service'):
+                state["alert_stats"] = self.alert_service.get_stats()
+            if hasattr(self, 'metrics_service'):
+                state["metrics_stats"] = self.metrics_service.get_stats()
+                state["metrics_dashboard"] = self.metrics_service.get_dashboard()
+        except Exception:
+            pass
         return state
 
     def add_manual_snipe(self, token_address: str, symbol: str, buy_price: float, amount_native: float, tx_hash: str, auto_hold_hours: float = 0):
@@ -2295,12 +2616,19 @@ class SniperBot:
 
         return snipe.to_dict()
 
-    def mark_snipe_sold(self, token_address: str, sell_tx: str = "") -> dict | None:
+    def mark_snipe_sold(self, token_address: str, sell_tx: str = "", sell_price: float = 0) -> dict | None:
         """Mark an active position as sold (triggered from frontend after swap)."""
         for snipe in self.active_snipes:
             if snipe.token_address.lower() == token_address.lower() and snipe.status == "active":
                 snipe.status = "sold"
                 snipe.sell_tx = sell_tx
+                # v4: record trade metrics
+                try:
+                    self.metrics_service.record_trade_from_snipe(
+                        snipe.to_dict(), sell_price, exit_reason="manual",
+                    )
+                except Exception:
+                    pass
                 # Remove from rug detector monitoring
                 if hasattr(self, 'rug_detector'):
                     try:

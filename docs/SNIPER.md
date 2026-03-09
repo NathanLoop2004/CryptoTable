@@ -777,4 +777,439 @@ Rastreo de wallets rentables:
 
 ---
 
+## Professional v3 — Módulos Avanzados
+
+### Arquitectura v3
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     SniperBot v3 Pipeline                            │
+│                                                                      │
+│  v2 Analysis (parallel)            v3 Analysis (sequential)          │
+│  ┌──────────────┐                  ┌──────────────────────────────┐  │
+│  │ PumpAnalyzer  │─── pump_result  │ PumpAnalyzer v3 Extras       │  │
+│  │ SwapSimulator │─── sim_result   │ (mcap, holder_growth, LP)    │  │
+│  │ Bytecode      │─── bytecode     │                              │  │
+│  │ SmartMoney    │─── smart_money  └──────────────────────────────┘  │
+│  └──────────────┘                                                    │
+│          ↓                         ┌──────────────────────────────┐  │
+│    all results                     │ DevTracker                   │  │
+│          ↓                         │ (creator reputation scoring) │  │
+│  ┌──────────────────────┐          └──────────┬───────────────────┘  │
+│  │ RiskEngine            │←── dev_result ──────┘                     │
+│  │ (7 component scoring) │←── pump, sim, bytecode, smart_money      │
+│  │ → final_score 0-100   │                                           │
+│  │ → action: BUY/WATCH/… │                                           │
+│  │ → hard_stop: T/F      │                                           │
+│  └──────────┬────────────┘                                           │
+│             ↓                                                        │
+│  ┌──────────────────────┐                                            │
+│  │ TradeExecutor         │← if action=BUY & executor enabled         │
+│  │ (backend sign+send)   │                                           │
+│  │ multi-RPC broadcast   │                                           │
+│  └───────────────────────┘                                           │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### PumpAnalyzer v3 (`pumpAnalyzer.py` — Enhanced)
+
+**10 componentes de scoring** (antes 7):
+
+| Componente | Peso | Descripción |
+|---|---|---|
+| liquidity | 14 | Score 0-100 basado en liquidez USD |
+| holder | 10 | Distribución de holders + flags |
+| activity | 15 | Volumen, buys/sells, concentración |
+| whale | 10 | Detección de ballenas >5% supply |
+| momentum | 12 | Precio 5m/1h/6h/24h + buy ratios |
+| age | 7 | Token age sweet spot (1-24h ideal) |
+| social | 4 | CoinGecko listing + social links |
+| **mcap** | **12** | **Market cap sweet spot ($20k-$400k)** |
+| **holder_growth** | **10** | **Crecimiento de holders/minuto** |
+| **lp_growth** | **6** | **Cambio en liquidez vs. inicial** |
+
+**Nuevas capacidades:**
+- **Time-series tracking:** `_TokenSnapshot` con timestamp + holder_count + liquidity_usd
+- **Market cap estimation:** mcap ≈ pair_liquidity_usd × 1.2 (para tokens sin CoinGecko)
+- **Holder growth rate:** Mide holders/min desde snapshots históricos
+- **LP growth monitoring:** Compara liquidez actual vs. primera lectura
+- **Stats persistentes:** `get_stats()` retorna tokens rastreados, snapshots totales
+- **Cleanup automático:** `cleanup_old()` elimina data >2h
+
+### DevTracker (`devTracker.py` — ~390 líneas)
+
+**Rastrea deployers y su historial de éxito/fracaso.**
+
+**Dataclasses:**
+- `DevLaunch`: token, symbol, launch_time, initial/peak liquidity, was_rug_pull, lp_locked, outcome
+- `DevProfile`: wallet, label, launches, reputation_score 0-100, 5 component scores
+- `DevCheckResult`: creator, is_tracked, dev_score, is_serial_scammer, signals
+
+**Sistema de Reputación (5 componentes):**
+
+| Componente | Peso | Criterio |
+|---|---|---|
+| launch_history | 40% | Éxitos vs rugs (≥3 rugs = serial scammer) |
+| liquidity_behavior | 20% | Peak LP vs initial LP multiplicador |
+| community_trust | 15% | Known dev bonus + label |
+| contract_quality | 15% | % tokens con LP locked |
+| recency | 10% | Actividad reciente (decay exponencial) |
+
+**Features:**
+- `check_creator(token, info)` → busca deployer via `eth_getTransactionCount` + creation tx
+- `record_launch()` → registra nuevo lanzamiento para futuro tracking
+- `record_outcome()` → actualiza resultado (rug/success) post-facto
+- Serial scammer detection: ≥3 rug pulls = bloqueo automático (HARD STOP)
+- Known devs: Base de datos de wallets conocidos con labels
+
+### RiskEngine (`riskEngine.py` — ~380 líneas)
+
+**Motor unificado de decisión que combina TODOS los módulos.**
+
+**7 componentes ponderados:**
+
+| Componente | Peso | Fuente |
+|---|---|---|
+| security | 25% | GoPlus flags, taxes, LP lock |
+| pump | 20% | PumpAnalyzer total_score |
+| dev | 15% | DevTracker reputation |
+| smart_money | 15% | Smart money buyer count |
+| simulation | 12% | SwapSimulator honeypot/taxes |
+| bytecode | 8% | Bytecode opcode flags |
+| market | 5% | Liquidez USD nivel |
+
+**Acciones resultantes:**
+
+| Action | Score | Significado |
+|---|---|---|
+| STRONG_BUY | ≥80 | Token excelente, ejecutar inmediatamente |
+| BUY | ≥65 | Buen token, comprar con confianza |
+| WATCH | ≥50 | Monitorear, esperar confirmación |
+| WEAK | ≥35 | Riesgoso, no recomendado |
+| IGNORE | <35 | Evitar completamente |
+
+**Hard Stops (override cualquier score):**
+- Honeypot confirmado (GoPlus o Simulation)
+- SELFDESTRUCT opcode encontrado
+- Serial scammer (≥3 rugs anteriores)
+- TokenSniffer SCAM flag
+- Simulation honeypot positivo
+
+**Confidence Boosting:** Más módulos con data = mayor confianza (base 50% + 10% por módulo)
+
+### TradeExecutor (`tradeExecutor.py` — ~470 líneas)
+
+**Ejecución backend de trades con private key (no requiere wallet frontend).**
+
+**Dataclasses:**
+- `TradeResult`: success, tx_hash, block_number, gas_used, execution_time_ms, error
+- `PreBuiltTx`: tx template pre-firmada con expiración 15s
+
+**Capacidades:**
+- `execute_buy(token, amount_native, slippage)` → swap native→token
+- `execute_sell(token, slippage, percent)` → swap token→native (con approve)
+- `_ensure_approval()` → aprueba router si allowance insuficiente
+- `_send_multi_rpc(signed_tx)` → broadcast a TODOS los RPCs en paralelo (velocidad máxima)
+- `_wait_confirmation(tx_hash, timeout=60)` → espera bloque de confirmación
+- `pre_build_buy_tx()` → pre-construye transacción para ejecución sub-segundo
+- Nonce management con lock asyncio
+- Gas pricing: Legacy BSC (max 10 gwei) / EIP-1559 ETH (max 200 gwei) con 10% buffer
+
+**Seguridad:**
+- Private key desde `os.environ["SNIPER_PRIVATE_KEY"]` (nunca en código)
+- No ejecuta sin key configurada
+- Habilitado solo con `enable_trade_executor: True` (default: False)
+
+### Settings v3
+
+```python
+"enable_dev_tracker": True,         # Dev reputation tracking
+"enable_risk_engine": True,         # Unified risk scoring
+"enable_trade_executor": False,     # Backend trade execution (requires SNIPER_PRIVATE_KEY)
+"risk_engine_min_score": 50,        # Minimum risk engine score to pass
+"risk_engine_auto_action": "BUY",   # Minimum action level (STRONG_BUY, BUY, WATCH, WEAK)
+```
+
+### WebSocket Events v3
+
+| Evento | Dirección | Descripción |
+|---|---|---|
+| `token_detected` | server→client | Ahora incluye dev_*, risk_engine_*, pump v3 extras |
+| `token_updated` | server→client | Idem con data refrescada |
+| `snipe_opportunity` | server→client | Incluye risk_engine_score, dev_score, backend_buy_available |
+| `backend_buy_executed` | server→client | Trade executor completó compra exitosa |
+| `backend_buy_failed` | server→client | Trade executor falló |
+| `scan_info` | server→client | Incluye v3 module startup info |
+
+### Frontend v3 Sections
+
+Cada token log card ahora muestra (si data disponible):
+
+1. **👨‍💻 Dev Tracker** — Score, label, launches, éxitos, rugs, serial scammer warning
+2. **🎯 Risk Engine** — Score 0-100, action (STRONG_BUY/BUY/etc), confidence, hard stop, signals
+3. **📊 Pump v3 Avanzado** — Market cap, MCap score, holder growth rate, LP growth
+4. **⚡ Backend Executor** — Status de disponibilidad
+
+---
+
 > **Disclaimer:** Este sistema reduce significativamente el riesgo pero NO lo elimina al 100%. El trading de tokens nuevos es inherentemente peligroso. Usa cantidades que puedas permitirte perder.
+
+---
+
+## Professional v4 — Monitoreo, Métricas y UX
+
+### Arquitectura v4
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                    SniperBot v4 Monitoring Layer                   │
+│                                                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐    │
+│  │ Resource     │  │ Alert        │  │ Metrics              │    │
+│  │ Monitor      │  │ Service      │  │ Service              │    │
+│  │ (CPU/Mem/WS) │  │ (TG/DC/Mail)│  │ (P&L/Speed/Stats)    │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘    │
+│         │                 │                      │                │
+│         └─────────────────┴──────────────────────┘                │
+│                           │                                       │
+│                    ┌──────▼───────┐                                │
+│                    │  SniperBot   │                                │
+│                    │  get_state() │                                │
+│                    │  pipeline    │                                │
+│                    └──────┬───────┘                                │
+│                           │                                       │
+│                    ┌──────▼──────────────┐                         │
+│                    │ sniperConsumer.py   │                         │
+│                    │ get_dashboard       │                         │
+│                    │ update_alert_config │                         │
+│                    └──────┬─────────────┘                         │
+│                           │                                       │
+│                    ┌──────▼──────────────┐                         │
+│                    │ Frontend Dashboard  │                         │
+│                    │ Chart.js + KPIs     │                         │
+│                    │ Profiles + Tutorial │                         │
+│                    └────────────────────┘                         │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+### Resource Monitor (`resourceMonitor.py` — ~248 líneas)
+
+**Monitoreo de recursos del sistema en tiempo real.**
+
+| Métrica | Fuente | Descripción |
+|---|---|---|
+| `memory_rss_mb` | psutil | Memoria RSS del proceso (MB) |
+| `memory_percent` | psutil | Porcentaje de uso de RAM |
+| `cpu_percent` | psutil | Porcentaje de uso de CPU |
+| `ws_connections` | counter | Conexiones WebSocket activas |
+| `ws_messages_sent` | counter | Total de mensajes WS enviados |
+| `ws_messages_rate` | time-series | Mensajes/segundo WS |
+| `tokens_processed` | counter | Total de tokens procesados |
+| `tokens_per_minute` | time-series | Tokens analizados por minuto |
+| `avg_analysis_ms` | rolling avg | Tiempo promedio de análisis (ms) |
+| `rpc_calls` | counter | Total de llamadas RPC |
+| `rpc_errors` | counter | Errores RPC acumulados |
+| `rpc_avg_latency_ms` | rolling avg | Latencia promedio RPC (ms) |
+
+**Umbrales de alerta:**
+
+| Recurso | Warning | Critical |
+|---|---|---|
+| Memory | 512 MB | 1024 MB |
+| CPU | 70% | 90% |
+| Active Tasks | 200 | — |
+
+**Features:**
+- `ResourceSnapshot` dataclass con timestamp + métricas instantáneas
+- Histórico rolling de 120 snapshots (2 horas a 1/min)
+- Método `get_stats()` retorna diccionario completo con warnings automáticas
+- Opción `psutil` (detallado) o fallback (básico) sin dependencia
+
+### Alert Service (`alertService.py` — ~350 líneas)
+
+**Sistema centralizado de alertas multi-canal.**
+
+| Canal | Configuración | Detección |
+|---|---|---|
+| **Telegram** | Token + Chat ID | Bot API `sendMessage` |
+| **Discord** | Webhook URL | POST con content |
+| **Email** | SMTP Gmail | `smtplib` con TLS |
+
+**Variables de entorno:**
+
+```bash
+# Telegram
+SNIPER_TELEGRAM_TOKEN=bot123456:ABCDEF...
+SNIPER_TELEGRAM_CHAT_ID=@my_channel
+
+# Discord
+SNIPER_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+
+# Email
+SNIPER_EMAIL_FROM=sniper@gmail.com
+SNIPER_EMAIL_TO=alerts@gmail.com
+SNIPER_EMAIL_PASSWORD=app_password
+```
+
+**Rate Limiting:**
+- Cooldown por categoría (5 min por defecto)
+- Cap máximo de 100 alertas por hora (configurable)
+
+**Log Rotation:**
+- Archivo: `logs/sniper_alerts.log`
+- Tamaño máximo: 5 MB por archivo
+- Backups: 5 archivos rotados
+
+**Convenience Methods:**
+
+| Método | Nivel | Categoría |
+|---|---|---|
+| `alert_token_suspicious(addr, reasons)` | WARNING | token_suspicious |
+| `alert_rpc_error(rpc_url, error)` | ERROR | rpc_error |
+| `alert_trade_executed(symbol, amount, tx)` | INFO | trade_executed |
+| `alert_trade_failed(symbol, error)` | ERROR | trade_failed |
+| `alert_rug_detected(symbol, alert_type)` | CRITICAL | rug_detected |
+| `alert_resource_warning(metric, value)` | WARNING | resource_warning |
+
+### Metrics Service (`metricsService.py` — ~340 líneas)
+
+**Motor de métricas y analytics para el dashboard.**
+
+**Estructuras de datos:**
+
+```python
+@dataclass
+class TradeRecord:
+    symbol: str                 # Token symbol
+    token_address: str          # Contract address
+    buy_price: float           # Entry price USD
+    sell_price: float          # Exit price USD
+    pnl_usd: float            # P&L en USD
+    pnl_percent: float         # P&L en porcentaje
+    hold_seconds: float        # Duración del trade
+    timestamp: float           # Hora del trade
+
+@dataclass
+class DetectionEvent:
+    token_address: str         # Contract address
+    detection_ms: float        # Velocidad de detección (ms)
+    passed_filters: bool       # ¿Pasó Buy Gating?
+    risk_level: str            # safe/warning/danger
+    timestamp: float           # Hora de detección
+```
+
+**Métricas calculadas:**
+
+| Métrica | Fórmula | Descripción |
+|---|---|---|
+| `total_trades` | count(trades) | Total de trades cerrados |
+| `wins` / `losses` | pnl > 0 / pnl <= 0 | Trades ganadores/perdedores |
+| `win_rate` | wins/total × 100 | Porcentaje de victoria |
+| `total_pnl` | sum(pnl_usd) | P&L acumulado en USD |
+| `avg_pnl_percent` | mean(pnl_percent) | P&L promedio por trade |
+| `best_trade` / `worst_trade` | max/min(pnl_percent) | Mejores/peores trades |
+| `filter_rate` | !passed/total × 100 | % tokens filtrados (no comprados) |
+| `avg_detection_ms` | mean(detection_ms) | Velocidad promedio de análisis |
+| `p95_detection_ms` | percentile(95) | Velocidad percentil 95 |
+
+**Time-Series (hourly buckets):**
+- `pnl_hourly` — P&L acumulado por hora
+- `detections_hourly` — Detecciones por hora
+- Últimas 24 horas (24 buckets)
+
+**Dashboard Payload (`get_dashboard()`):**
+
+```json
+{
+    "trade_stats": { "total_trades": 15, "wins": 10, "win_rate": 66.7, "total_pnl": 125.50 },
+    "detection_stats": { "total_detections": 450, "filter_rate": 92.3, "avg_detection_ms": 850 },
+    "effectiveness": { "safe_token_pct": 45.0, "avg_gain_pct": 32.5, "avg_loss_pct": -12.3 },
+    "hourly_series": { "labels": ["10:00","11:00",...], "pnl": [10.5, -3.2,...], "detections": [45, 52,...] },
+    "resource_stats": { "memory_rss_mb": 245, "cpu_percent": 35, ... },
+    "alert_stats": { "total_alerts": 28, "last_24h": 12, ... }
+}
+```
+
+### Test Suite (130 tests — 8 archivos)
+
+Todos los módulos v4 (y anteriores) tienen cobertura de tests automatizados:
+
+| Archivo | Tests | Cobertura |
+|---|---|---|
+| `test_resourceMonitor.py` | 16 | Token processing, WS tracking, RPC tracking, snapshots, history, stats |
+| `test_alertService.py` | 27 | AlertEvent, LevelOrder, rate limiting, send, convenience methods |
+| `test_riskEngine.py` | 14 | Init, weights, hard stops, safe token scoring, thresholds |
+| `test_pumpAnalyzer.py` | 15 | Scoring, mock attributes, get_stats, cleanup |
+| `test_devTracker.py` | 16 | Creator tracking, reputation, serial scammer, known devs |
+| `test_rugDetector.py` | 6 | Alert levels, method monitoring, emergency triggers |
+| `test_sniperService.py` | 36 | Bot init, settings, state, dataclasses, enums, v2+v3 fields |
+
+**Ejecutar tests:**
+
+```bash
+python manage.py test trading.tests -v 2
+```
+
+### WebSocket Events v4
+
+| Evento | Dirección | Descripción |
+|---|---|---|
+| `dashboard` | server→client | Dashboard completo (auto-refresh 30s) |
+| `dashboard_response` | server→client | Respuesta a `get_dashboard` action |
+| `alert_config_updated` | server→client | Confirmación de config de alertas |
+
+### Frontend → Bot (nuevas acciones)
+
+| Acción | Qué hace |
+|---|---|
+| `get_dashboard` | Retorna payload completo del dashboard |
+| `update_alert_config` | Actualiza Telegram/Discord/Email toggles |
+| `mark_snipe_sold` | Ahora acepta `sell_price` para métricas |
+
+### Frontend v4
+
+#### Performance Dashboard
+
+- **6 KPI Cards:** Total trades, Win rate, P&L acumulado, Detecciones, Filter rate, Avg speed
+- **2 Charts (Chart.js 4.4.0):** P&L por hora (bar), Detecciones por hora (line)
+- **Effectiveness Grid:** % safe tokens, avg gain/loss, tx failure rate, avg hold time, best trade
+- **Resource Monitor Bar:** Memory, CPU, Tokens processed, WS connections, RPC calls
+
+#### User Profiles
+
+| Perfil | Min Liquidez | Only Safe | Auto Buy | Risk |
+|---|---|---|---|---|
+| **Novato** | $10,000 | ✅ | ❌ | Conservador |
+| **Intermedio** | $5,000 | ✅ | ❌ | Balanced |
+| **Avanzado** | $2,000 | ❌ | ✅ | Agresivo |
+
+Los perfiles pre-configuran TODOS los settings del bot con un click.
+
+#### Tutorial Overlay
+
+Walkthrough de 6 pasos al primer uso:
+1. 🔗 Conectar wallet (Trust Wallet / MetaMask)
+2. ⚙️ Configurar settings de trading
+3. 🚀 Iniciar el bot
+4. 📊 Revisar tokens detectados
+5. 🎯 Ejecutar trades
+6. 📈 Consultar dashboard de rendimiento
+
+Se guarda en `localStorage` con opción "No mostrar de nuevo".
+
+#### Tooltips
+
+Todos los inputs de configuración tienen tooltips informativos (ⓘ) con explicaciones en español de cada parámetro.
+
+### Settings v4
+
+Las alertas se configuran via variables de entorno (ver Alert Service arriba). Los toggles del frontend envían `update_alert_config` via WebSocket para activar/desactivar canales en caliente.
+
+### Integración en Pipeline
+
+v4 se integra de forma no-invasiva en el pipeline existente:
+
+1. **`_process_pair()`:** Registra tiempo de análisis → `resource_monitor.record_token_processed()`, crea `DetectionEvent` → `metrics_service.record_detection()`, alerta si token sospechoso
+2. **RPC errors:** `resource_monitor.record_rpc_call(success=False)` + `alert_service.alert_rpc_error()`
+3. **`mark_snipe_sold()`:** `metrics_service.record_trade_from_snipe()` con buy/sell prices
+4. **`get_state()`:** Incluye `resource_stats`, `alert_stats`, `metrics_stats`, `metrics_dashboard`
