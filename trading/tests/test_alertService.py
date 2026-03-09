@@ -63,6 +63,8 @@ class TestAlertService(unittest.TestCase):
             "log_file": "logs/test_alerts.log",
         })
 
+    @patch.dict("trading.Services.alertService.DEFAULT_CONFIG",
+                {"discord_enabled": False, "telegram_enabled": False, "email_enabled": False})
     def test_default_config(self):
         svc = AlertService()
         self.assertFalse(svc.config["telegram_enabled"])
