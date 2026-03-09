@@ -1,5 +1,6 @@
 Django==6.0.2
 channels==4.3.2
+channels-redis==4.2.1
 daphne==4.2.1
 django-cors-headers==4.9.0
 web3==7.14.1
@@ -11,3 +12,13 @@ passlib==1.7.4
 pycryptodome==3.23.0
 psycopg2-binary==2.9.11
 websockets==15.0.1
+# ── v6: Production infrastructure ──
+celery[redis]==5.4.0
+django-celery-results==2.5.1
+redis==5.2.1
+# ── v6: ML / Data ──
+numpy==2.2.3
+scikit-learn==1.6.1
+pandas==2.2.3
+# ── v6: MEV protection ──
+flashbots==2.1.1

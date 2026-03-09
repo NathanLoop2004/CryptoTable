@@ -64,6 +64,12 @@ from trading.Services.mlPredictor import PumpDumpPredictor, DevReputationML, Ano
 from trading.Services.socialSentiment import SocialSentimentAnalyzer
 from trading.Services.dynamicContractScanner import DynamicContractScanner
 from trading.Services.smartMoneyTracker import WhaleAlert, WhaleActivity
+# ── Professional v6 modules ──
+from trading.Services.backtestEngine import BacktestEngine, BacktestConfig, BacktestResult
+from trading.Services.copyTrader import CopyTrader
+from trading.Services.mevProtection import MEVProtector, MEVAnalysis
+from trading.Services.multiDexRouter import MultiDexRouter
+from trading.Services.strategyOptimizer import StrategyOptimizer, TradeOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +370,25 @@ class TokenInfo:
     dynamic_scan_block_reason: str = ""
     dynamic_scan_alerts: list = field(default_factory=list)
     _dynamic_scan_ok: bool = False
+    # ── v6: MEV Protection ──
+    mev_threat_level: str = "unknown"
+    mev_strategy_used: str = "none"
+    mev_frontrun_risk: float = 0.0
+    mev_sandwich_risk: float = 0.0
+    _mev_ok: bool = False
+    # ── v6: Multi-DEX ──
+    best_dex_name: str = ""
+    best_dex_amount_out: float = 0.0
+    best_dex_route: list = field(default_factory=list)
+    _multi_dex_ok: bool = False
+    # ── v6: Copy Trading ──
+    copy_trade_signal: bool = False
+    copy_trade_wallet: str = ""
+    copy_trade_confidence: int = 0
+    # ── v6: AI Optimizer ──
+    ai_regime: str = "unknown"
+    ai_suggested_tp: float = 0.0
+    ai_suggested_sl: float = 0.0
     # ── v5: Dev ML ──
     dev_ml_reputation: int = 50
     dev_ml_cluster: str = "neutral"
@@ -1121,6 +1146,15 @@ class SniperBot:
             "enable_dynamic_scanner": True,      # continuous contract monitoring
             "ml_min_score": 30,                  # min ML pump score to buy
             "social_min_score": 0,               # min social sentiment to buy (0 = disabled)
+            # ── v6 Professional modules (toggles) ──
+            "enable_mev_protection": False,        # MEV protection (Flashbots/48Club)
+            "enable_copy_trading": False,           # whale copy trading
+            "enable_multi_dex": True,               # multi-DEX routing
+            "enable_ai_optimizer": True,            # AI strategy optimizer
+            "enable_backtesting": True,             # backtesting engine
+            "mev_auto_protect": False,              # auto-apply MEV protection to all trades
+            "copy_trade_max_amount": 0.1,           # max BNB/ETH per copy trade
+            "copy_trade_auto_follow": True,         # auto-follow smart money wallets
         }
 
         # State
@@ -1197,6 +1231,19 @@ class SniperBot:
         self.social_sentiment = SocialSentimentAnalyzer()
         self.dynamic_scanner = DynamicContractScanner(self.w3, chain_id)
         self._dynamic_scanner_task: asyncio.Task | None = None
+
+        # ── Professional v6 modules ──
+        self.mev_protector = MEVProtector(self.w3, chain_id)
+        self.copy_trader = CopyTrader(self.w3, chain_id)
+        self.multi_dex_router = MultiDexRouter()
+        self.strategy_optimizer = StrategyOptimizer()
+        self.backtest_engine = BacktestEngine(self.w3, chain_id)
+
+        # Connect v6 modules
+        if self.trade_executor:
+            self.copy_trader.set_trade_executor(self.trade_executor)
+        self.copy_trader.set_smart_money_tracker(self.smart_money)
+        self.multi_dex_router.add_chain(chain_id, w3=self.w3)
 
         # Background task handles for professional modules
         self._mempool_task: asyncio.Task | None = None
@@ -1502,6 +1549,26 @@ class SniperBot:
             "dev_ml_reputation": info.dev_ml_reputation,
             "dev_ml_cluster": info.dev_ml_cluster,
             "dev_ml_confidence": info.dev_ml_confidence,
+            # ── Professional v6 data ──
+            # MEV Protection
+            "mev_threat_level": info.mev_threat_level,
+            "mev_strategy_used": info.mev_strategy_used,
+            "mev_frontrun_risk": info.mev_frontrun_risk,
+            "mev_sandwich_risk": info.mev_sandwich_risk,
+            "mev_ok": info._mev_ok,
+            # Multi-DEX Routing
+            "best_dex_name": info.best_dex_name,
+            "best_dex_amount_out": info.best_dex_amount_out,
+            "best_dex_route": info.best_dex_route,
+            "multi_dex_ok": info._multi_dex_ok,
+            # Copy Trading
+            "copy_trade_signal": info.copy_trade_signal,
+            "copy_trade_wallet": info.copy_trade_wallet,
+            "copy_trade_confidence": info.copy_trade_confidence,
+            # AI Optimizer
+            "ai_regime": info.ai_regime,
+            "ai_suggested_tp": info.ai_suggested_tp,
+            "ai_suggested_sl": info.ai_suggested_sl,
         }
 
     # ─── Refresh detected tokens (periodic re-check) ───────
@@ -2084,6 +2151,63 @@ class SniperBot:
         except Exception as e:
             logger.error(f"v5 analysis pipeline error for {token_info.symbol}: {e}")
 
+        # ═══════════════════════════════════════════════════════
+        #  v6 Analysis Pipeline — MEV, Multi-DEX, AI Optimizer
+        # ═══════════════════════════════════════════════════════
+        try:
+            # v6: MEV threat analysis
+            if self.settings.get("enable_mev_protection", False):
+                try:
+                    buy_amount = self.settings.get("buy_amount_native", 0.05)
+                    mev_analysis = await self.mev_protector.analyze_threat(new_token, buy_amount)
+                    token_info.mev_threat_level = mev_analysis.threat_level
+                    token_info.mev_frontrun_risk = mev_analysis.frontrun_risk
+                    token_info.mev_sandwich_risk = mev_analysis.sandwich_risk
+                    token_info.mev_strategy_used = mev_analysis.recommended_strategy
+                    token_info._mev_ok = True
+                except Exception as e:
+                    logger.debug(f"MEV analysis failed for {token_info.symbol}: {e}")
+
+            # v6: Multi-DEX best route
+            if self.settings.get("enable_multi_dex", True):
+                try:
+                    buy_amount = self.settings.get("buy_amount_native", 0.05)
+                    best_route = await self.multi_dex_router.find_best_route(
+                        self.chain_id, new_token, buy_amount, direction="buy"
+                    )
+                    if best_route and best_route.amount_out > 0:
+                        token_info.best_dex_name = best_route.dex_name
+                        token_info.best_dex_amount_out = best_route.amount_out / 1e18
+                        token_info.best_dex_route = best_route.path
+                        token_info._multi_dex_ok = True
+                except Exception as e:
+                    logger.debug(f"Multi-DEX routing failed for {token_info.symbol}: {e}")
+
+            # v6: AI regime & suggestions
+            if self.settings.get("enable_ai_optimizer", True):
+                try:
+                    regime = self.strategy_optimizer.detect_market_regime()
+                    token_info.ai_regime = regime.regime
+                    suggestion = self.strategy_optimizer.get_suggestion()
+                    if suggestion.get("proposed_params"):
+                        token_info.ai_suggested_tp = suggestion["proposed_params"].get("take_profit_pct", 0)
+                        token_info.ai_suggested_sl = suggestion["proposed_params"].get("stop_loss_pct", 0)
+                except Exception as e:
+                    logger.debug(f"AI optimizer context failed: {e}")
+
+            # Re-emit with v6 data
+            await self._emit("token_detected",
+                self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
+            )
+            logger.info(
+                f"v6 analysis for {token_info.symbol}: "
+                f"mev={token_info.mev_threat_level} "
+                f"best_dex={token_info.best_dex_name or 'default'} "
+                f"ai_regime={token_info.ai_regime}"
+            )
+        except Exception as e:
+            logger.error(f"v6 analysis pipeline error for {token_info.symbol}: {e}")
+
         # Check if safe enough
         passes_safety = True
         if self.settings["only_safe"] and token_info.risk == "danger":
@@ -2245,6 +2369,20 @@ class SniperBot:
         if token_info._whale_ok and token_info.whale_coordinated:
             logger.info(f"⚠️ {token_info.symbol}: coordinated whale buying detected")
 
+        # ── Professional v6 safety gates ──
+        # MEV threat gate — block high-risk tokens with active bots
+        if token_info._mev_ok and self.settings.get("enable_mev_protection", False):
+            if token_info.mev_threat_level == "critical":
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: MEV critical threat (frontrun={token_info.mev_frontrun_risk:.0%}, sandwich={token_info.mev_sandwich_risk:.0%})")
+            elif token_info.mev_threat_level == "high" and token_info.mev_sandwich_risk > 0.7:
+                passes_safety = False
+                logger.info(f"Skipping {token_info.symbol}: MEV high sandwich risk ({token_info.mev_sandwich_risk:.0%})")
+
+        # Multi-DEX gate — warn if no route found (but don't block)
+        if self.settings.get("enable_multi_dex", True) and not token_info._multi_dex_ok:
+            logger.debug(f"⚠️ {token_info.symbol}: no multi-DEX route found, using default router")
+
         if passes_safety:
             # Auto-calculate max_hold from LP lock duration (sell 1h before expiry)
             auto_hold_h = 0
@@ -2279,28 +2417,94 @@ class SniperBot:
                 try:
                     buy_amount = self.settings.get("buy_amount_native", 0.01)
                     slippage = self.settings.get("slippage", 15)
-                    trade_result = await self.trade_executor.execute_buy(
-                        token_address=new_token,
-                        amount_native=buy_amount,
-                        slippage=slippage,
+
+                    # v6: Use MEV-protected tx if enabled
+                    use_mev = (
+                        self.settings.get("enable_mev_protection", False)
+                        and self.settings.get("mev_auto_protect", True)
+                        and token_info._mev_ok
+                        and token_info.mev_threat_level in ("high", "medium")
                     )
-                    if trade_result and trade_result.success:
-                        await self._emit("backend_buy_executed", {
-                            "token": new_token,
-                            "symbol": token_info.symbol,
-                            "tx_hash": trade_result.tx_hash,
-                            "amount_native": buy_amount,
-                            "gas_used": trade_result.gas_used,
-                            "execution_ms": trade_result.execution_time_ms,
-                        })
-                        logger.info(f"🎯 Backend BUY executed for {token_info.symbol}: tx={trade_result.tx_hash}")
-                    elif trade_result:
-                        await self._emit("backend_buy_failed", {
-                            "token": new_token,
-                            "symbol": token_info.symbol,
-                            "error": trade_result.error,
-                        })
-                        logger.warning(f"Backend BUY failed for {token_info.symbol}: {trade_result.error}")
+
+                    if use_mev and self.mev_protector:
+                        try:
+                            mev_analysis = MEVAnalysis(
+                                token_address=new_token,
+                                threat_level=token_info.mev_threat_level or "unknown",
+                                frontrun_risk=token_info.mev_frontrun_risk,
+                                sandwich_risk=token_info.mev_sandwich_risk,
+                                recommended_strategy=token_info.mev_strategy_used or "gas_boost",
+                            )
+                            raw_tx = {
+                                "to": self.settings.get("router_address", ""),
+                                "value": int(buy_amount * 10**18),
+                                "token_address": new_token,
+                                "slippage": slippage,
+                            }
+                            protected = await self.mev_protector.protect_transaction(
+                                raw_tx, mev_analysis,
+                            )
+                            if protected and protected.success:
+                                tx_hash = protected.bundle_hash or "mev-protected"
+                                await self._emit("backend_buy_executed", {
+                                    "token": new_token,
+                                    "symbol": token_info.symbol,
+                                    "tx_hash": tx_hash,
+                                    "amount_native": buy_amount,
+                                    "gas_price_protected": protected.gas_price_protected,
+                                    "mev_protected": True,
+                                    "mev_strategy": protected.strategy_used,
+                                })
+                                logger.info(f"🛡️ MEV-protected BUY for {token_info.symbol}: tx={tx_hash} (strategy={protected.strategy_used})")
+                            else:
+                                logger.warning(f"MEV protection failed for {token_info.symbol}, falling back to normal buy")
+                                use_mev = False  # fall through to normal buy
+                        except Exception as e:
+                            logger.warning(f"MEV protection error: {e}, falling back to normal buy")
+                            use_mev = False
+
+                    if not use_mev:
+                        trade_result = await self.trade_executor.execute_buy(
+                            token_address=new_token,
+                            amount_native=buy_amount,
+                            slippage=slippage,
+                        )
+                        if trade_result and trade_result.success:
+                            await self._emit("backend_buy_executed", {
+                                "token": new_token,
+                                "symbol": token_info.symbol,
+                                "tx_hash": trade_result.tx_hash,
+                                "amount_native": buy_amount,
+                                "gas_used": trade_result.gas_used,
+                                "execution_ms": trade_result.execution_time_ms,
+                                "mev_protected": False,
+                            })
+                            logger.info(f"🎯 Backend BUY executed for {token_info.symbol}: tx={trade_result.tx_hash}")
+                        elif trade_result:
+                            await self._emit("backend_buy_failed", {
+                                "token": new_token,
+                                "symbol": token_info.symbol,
+                                "error": trade_result.error,
+                            })
+                            logger.warning(f"Backend BUY failed for {token_info.symbol}: {trade_result.error}")
+
+                    # v6: Record trade outcome for AI optimizer
+                    if self.settings.get("enable_ai_optimizer", True) and self.strategy_optimizer:
+                        try:
+                            trade_outcome = TradeOutcome(
+                                token_address=new_token,
+                                params_name="sniper",
+                                pnl_percent=0.0,
+                                exit_reason="entry",
+                                market_regime=token_info.ai_regime or "unknown",
+                                gas_price_gwei=float(self.settings.get("gas_price_gwei", 5.0)),
+                                liquidity_usd=float(token_info.liquidity_usd),
+                                timestamp=time.time(),
+                            )
+                            self.strategy_optimizer.record_trade(trade_outcome)
+                        except Exception:
+                            pass
+
                 except Exception as e:
                     logger.error(f"Backend trade executor error for {token_info.symbol}: {e}")
 
@@ -2694,6 +2898,24 @@ class SniperBot:
         if v5_modules:
             await self._emit("scan_info", {"message": f"🧠 v5 modules: {', '.join(v5_modules)}"})
 
+        # ── Professional v6: module startup ──
+        v6_modules = []
+        if self.settings.get("enable_mev_protection", False) and self.mev_protector:
+            strategy = self.mev_protector.config.strategy_priority[0] if self.mev_protector.config.strategy_priority else "none"
+            v6_modules.append(f"MEVProtector({strategy})")
+        if self.settings.get("enable_multi_dex", True) and self.multi_dex_router:
+            chain_dexes = len(self.multi_dex_router.get_dexes(self.chain_id))
+            v6_modules.append(f"MultiDEX({chain_dexes} dexes)")
+        if self.settings.get("enable_ai_optimizer", True) and self.strategy_optimizer:
+            v6_modules.append("AI-Optimizer")
+        if self.settings.get("enable_backtesting", False) and self.backtest_engine:
+            v6_modules.append("BacktestEngine")
+        if self.settings.get("enable_copy_trading", False) and self.copy_trader:
+            self._copy_trader_task = asyncio.ensure_future(self.copy_trader.start())
+            v6_modules.append("CopyTrader(bg)")
+        if v6_modules:
+            await self._emit("scan_info", {"message": f"🚀 v6 modules: {', '.join(v6_modules)}"})
+
         price_tick = 0
         enrich_tick = 0           # Fast enrichment cycle (every ~3s)
         slow_tick = 0              # Full refresh cycle (every ~15s)
@@ -2972,6 +3194,14 @@ class SniperBot:
             self.dynamic_scanner.stop()
         if hasattr(self, '_dynamic_scanner_task') and self._dynamic_scanner_task:
             self._dynamic_scanner_task.cancel()
+        # v6: stop copy trader
+        if hasattr(self, 'copy_trader') and self.copy_trader:
+            try:
+                asyncio.ensure_future(self.copy_trader.stop())
+            except RuntimeError:
+                pass
+        if hasattr(self, '_copy_trader_task') and self._copy_trader_task:
+            self._copy_trader_task.cancel()
 
     def update_settings(self, new_settings: dict):
         """Update bot settings from frontend."""
@@ -3048,6 +3278,23 @@ class SniperBot:
                     "predictions": self.ml_predictor._total_predictions if hasattr(self.ml_predictor, '_total_predictions') else 0,
                     "online_samples": len(self.ml_predictor._outcome_buffer) if hasattr(self.ml_predictor, '_outcome_buffer') else 0,
                 }
+        except Exception:
+            pass
+        # v6 module stats
+        try:
+            if hasattr(self, 'mev_protector') and self.mev_protector:
+                state["mev_stats"] = self.mev_protector.get_stats() if hasattr(self.mev_protector, 'get_stats') else {}
+            if hasattr(self, 'multi_dex_router') and self.multi_dex_router:
+                state["multi_dex_stats"] = {
+                    "chains": len(self.multi_dex_router.get_active_chains()),
+                    "current_chain_dexes": len(self.multi_dex_router.get_dexes(self.chain_id)),
+                }
+            if hasattr(self, 'strategy_optimizer') and self.strategy_optimizer:
+                state["ai_optimizer_stats"] = self.strategy_optimizer.get_stats() if hasattr(self.strategy_optimizer, 'get_stats') else {}
+            if hasattr(self, 'copy_trader') and self.copy_trader:
+                state["copy_trader_stats"] = self.copy_trader.get_stats() if hasattr(self.copy_trader, 'get_stats') else {}
+            if hasattr(self, 'backtest_engine') and self.backtest_engine:
+                state["backtest_stats"] = {"available": True}
         except Exception:
             pass
         return state

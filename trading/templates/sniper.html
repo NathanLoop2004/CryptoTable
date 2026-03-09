@@ -190,6 +190,55 @@
                     <span>⏱️ Rate-limited: <span id="alert-rate-limited">0</span></span>
                 </div>
             </div>
+
+            <!-- v6: Advanced Modules -->
+            <div class="sniper-card">
+                <h3 class="sc-title">🚀 v6 Modules</h3>
+
+                <div class="setting-row toggle-row">
+                    <label>🛡️ MEV Protection <span class="tooltip-icon" title="Protege tus transacciones contra bots MEV (sandwich attacks, frontrunning). Usa relays privados.">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-mev-protection">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>📡 Copy Trading <span class="tooltip-icon" title="Copia automáticamente las operaciones de wallets de ballenas y traders exitosos.">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-copy-trading">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>🔀 Multi-DEX <span class="tooltip-icon" title="Busca el mejor precio en múltiples DEXes (PancakeSwap, UniSwap, SushiSwap, etc).">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-multi-dex" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>🧠 AI Optimizer <span class="tooltip-icon" title="Optimiza parámetros de trading (TP/SL/slippage) usando machine learning y detección de régimen de mercado.">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-ai-optimizer" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row toggle-row">
+                    <label>📈 Backtesting <span class="tooltip-icon" title="Simula tu estrategia con datos históricos para ver rendimiento pasado antes de arriesgar dinero real.">ⓘ</span></label>
+                    <label class="toggle">
+                        <input type="checkbox" id="set-backtesting">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+
+                <!-- v6 Module Status Chips -->
+                <div class="v6-status-row" id="v6-status-row">
+                    <span class="v6-chip" id="v6-mev-chip" title="MEV Protection status">🛡️ MEV: <span>OFF</span></span>
+                    <span class="v6-chip" id="v6-dex-chip" title="Multi-DEX status">🔀 DEX: <span>0</span></span>
+                    <span class="v6-chip" id="v6-ai-chip" title="AI regime">🧠 AI: <span>—</span></span>
+                    <span class="v6-chip" id="v6-copy-chip" title="Copy Trading status">📡 Copy: <span>OFF</span></span>
+                </div>
+            </div>
         </div>
 
         <!-- RIGHT: Feed + Detected + Active -->
@@ -227,6 +276,12 @@
                         <div class="pipe-icon">🎯</div>
                         <div class="pipe-label">Sniper</div>
                         <div class="pipe-count" id="pipe-snipe-count">0</div>
+                    </div>
+                    <div class="pipe-arrow">→</div>
+                    <div class="pipe-step" id="pipe-mev">
+                        <div class="pipe-icon">🛡️</div>
+                        <div class="pipe-label">MEV</div>
+                        <div class="pipe-count" id="pipe-mev-count">—</div>
                     </div>
                     <div class="pipe-arrow">→</div>
                     <div class="pipe-step" id="pipe-profit">

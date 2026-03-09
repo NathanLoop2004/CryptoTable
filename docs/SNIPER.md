@@ -1,6 +1,6 @@
 # Sniper Bot — Documentación Técnica
 
-Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: detección automática de nuevos tokens en BSC/ETH, análisis multi-capa con 5 APIs + 16 módulos profesionales (incluye ML, sentimiento social, escaneo dinámico), y ejecución de trades con 22 capas de protección.
+Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: detección automática de nuevos tokens en BSC/ETH, análisis multi-capa con 5 APIs + 21 módulos profesionales (incluye ML, sentimiento social, escaneo dinámico, MEV protection, copy trading, multi-DEX routing, AI strategy optimizer, backtesting engine), y ejecución de trades con 25 capas de protección.
 
 ---
 
@@ -63,14 +63,26 @@ Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: dete
                                      ┌──────▼─────────┐
                                      │ DynContractScan│
                                      │ v5 (continuo)  │
-                                     └────────────────┘
+                                     └────┬───────────┘
+                                          │
+              ┌───────────────────────────┤ v6 Modules
+              │                           │
+       ┌──────▼──────┐  ┌────────────────▼┐  ┌───────────────┐
+       │ MEVProtector │  │ MultiDexRouter  │  │ StrategyOpt.  │
+       │ v6 (anti-MW)│  │ v6 (5 chains)   │  │ v6 (AI/ML)    │
+       └─────────────┘  └─────────────────┘  └───────────────┘
+              │                    │                 │
+       ┌──────▼──────┐  ┌────────▼────────┐  ┌─────▼─────────┐
+       │ CopyTrader   │  │ BacktestEngine  │  │ Celery Tasks  │
+       │ v6 (whales)  │  │ v6 (simulation) │  │ (scheduled)   │
+       └──────────────┘  └─────────────────┘  └───────────────┘
 ```
 
 ### Archivos principales
 
 | Archivo | Líneas | Rol |
 |---|---|---|
-| `Services/sniperService.py` | 3,103 | Motor principal: `ContractAnalyzer` + `SniperBot` + enrichment + scan loop |
+| `Services/sniperService.py` | ~3,360 | Motor principal: `ContractAnalyzer` + `SniperBot` + enrichment + scan loop + v6 integration |
 | `Services/swapSimulator.py` | 1,084 | Simulación on-chain + bytecode + proxy + stress + volatilidad |
 | `Services/smartMoneyTracker.py` | 650+ | Tracking de wallets rentables + whale activity analysis |
 | `Services/mlPredictor.py` | 621 | **v5** ML: pump/dump predictor, dev reputation ML, anomaly detector |
@@ -79,6 +91,11 @@ Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: dete
 | `Services/pumpAnalyzer.py` | 597 | Scoring con 10 componentes ponderados |
 | `Services/devTracker.py` | 582 | Reputación del deployer + ML reputation blending |
 | `Services/dynamicContractScanner.py` | 512 | **v5** Escaneo continuo de contratos con scoring dinámico |
+| `Services/mevProtection.py` | ~500 | **v6** Anti-sandwich/frontrun (Flashbots, 48Club, gas boost, tx split) |
+| `Services/strategyOptimizer.py` | ~500 | **v6** AI/ML strategy optimization + market regime detection |
+| `Services/multiDexRouter.py` | ~470 | **v6** Best route across 5 chains, 15+ DEXes |
+| `Services/copyTrader.py` | ~460 | **v6** Whale wallet following + auto-copy trades |
+| `Services/backtestEngine.py` | ~430 | **v6** Historical backtesting with virtual portfolio |
 | `Services/riskEngine.py` | 444 | Motor unificado de riesgo (7 señales → 0-100) |
 | `Services/rugDetector.py` | 417 | Monitoreo post-compra continuo |
 | `Services/alertService.py` | 404 | Multi-canal: Telegram/Discord/Email |
@@ -86,10 +103,11 @@ Documentación técnica detallada del módulo **Sniper Bot** de TradingWeb: dete
 | `Services/preLaunchDetector.py` | 358 | Detección antes de listing |
 | `Services/metricsService.py` | 329 | P&L tracking, win rate, series temporales |
 | `Services/resourceMonitor.py` | 211 | CPU/RAM/WebSocket/RPC metrics |
+| `tasks.py` | ~170 | **v6** Celery periodic + on-demand tasks |
 | `WebSocket/sniperConsumer.py` | 146 | Bridge Django Channels ↔ Frontend |
-| `static/js/pageSniper.js` | 2,166 | Lógica frontend completa con dedup + v5 UI |
-| `templates/sniper.html` | 519 | UI del Sniper Bot |
-| `static/css/main.css` | 2,569 | Estilos Binance dark theme |
+| `static/js/pageSniper.js` | ~2,240 | Lógica frontend completa con dedup + v5/v6 UI |
+| `templates/sniper.html` | ~610 | UI del Sniper Bot con v6 modules panel |
+| `static/css/main.css` | ~2,830 | Estilos Binance dark theme + v6 chips/badges |
 
 ---
 
@@ -1305,10 +1323,11 @@ STABLECOINS = {'0x55d398326f99059fF775485246999027B3197955', ...}  # USDT, USDC,
 python manage.py test trading.tests -v 2
 ```
 
-### 166 tests en 8 archivos
+### 304 tests en 9 archivos
 
 | Archivo | Tests | Cobertura |
 |---|---|---|
+| `test_v6_modules.py` | 138 | **v6** MEV protector, copy trader, multi-DEX, AI optimizer, backtest engine |
 | `test_v5_modules.py` | 36 | **v5** ML predictor, social sentiment, proxy, stress, volatility, anomaly, scanner |
 | `test_sniperService.py` | 36 | Bot init, settings, state management, chains |
 | `test_alertService.py` | 27 | Events, rate limiting, send, formatting |
@@ -1318,7 +1337,7 @@ python manage.py test trading.tests -v 2
 | `test_riskEngine.py` | 14 | Weights, hard stops, classification |
 | `test_rugDetector.py` | 6 | Alert levels, trigger conditions |
 
-**Total: 166 tests — OK (1.986s)**
+**Total: 304 tests — OK (~1.7s)**
 
 ---
 

@@ -535,6 +535,33 @@
       <div class="tlc-title">⚡ Backend Executor</div>
       <div style="color:#02c076;font-weight:600">Ready for auto-execution</div>
     </div>` : ''}
+    ${data.mev_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🛡️ MEV Protection (v6)</div>
+      <div>Threat: <strong style="color:${data.mev_threat_level==='critical'||data.mev_threat_level==='high'?'#e74c3c':data.mev_threat_level==='medium'?'#f0b90b':'#02c076'}">${(data.mev_threat_level||'none').toUpperCase()}</strong></div>
+      <div>Frontrun Risk: ${((data.mev_frontrun_risk||0)*100).toFixed(0)}%</div>
+      <div>Sandwich Risk: ${((data.mev_sandwich_risk||0)*100).toFixed(0)}%</div>
+      ${data.mev_strategy_used ? `<div>Strategy: <strong>${data.mev_strategy_used}</strong></div>` : ''}
+    </div>` : ''}
+    ${data.multi_dex_ok ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🔀 Multi-DEX Route (v6)</div>
+      <div>Best DEX: <strong style="color:#1e96ff">${data.best_dex_name||'—'}</strong></div>
+      <div>Amount Out: ${(data.best_dex_amount_out||0).toFixed(6)}</div>
+    </div>` : ''}
+    ${data.ai_regime ? `
+    <div class="tlc-section">
+      <div class="tlc-title">🧠 AI Optimizer (v6)</div>
+      <div>Regime: <strong style="color:${data.ai_regime==='bull'?'#02c076':data.ai_regime==='bear'?'#e74c3c':'#f0b90b'}">${(data.ai_regime||'—').toUpperCase()}</strong></div>
+      ${data.ai_suggested_tp ? `<div>Suggested TP: <strong style="color:#02c076">${data.ai_suggested_tp}%</strong></div>` : ''}
+      ${data.ai_suggested_sl ? `<div>Suggested SL: <strong style="color:#e74c3c">${data.ai_suggested_sl}%</strong></div>` : ''}
+    </div>` : ''}
+    ${data.copy_trade_signal ? `
+    <div class="tlc-section">
+      <div class="tlc-title">📡 Copy Trade (v6)</div>
+      <div>Wallet: <strong>${data.copy_trade_wallet||'—'}</strong></div>
+      <div>Confidence: ${((data.copy_trade_confidence||0)*100).toFixed(0)}%</div>
+    </div>` : ''}
   </div>
   <div class="tlc-reasons">
     <div class="tlc-title">🚩 Risk Reasons</div>
@@ -1008,9 +1035,11 @@
                 break;
 
             /* ── Professional v3 events ─────────────────── */
-            case "backend_buy_executed":
-                addFeedHTML(`⚡ <strong>BACKEND BUY</strong>: ${data.symbol} — ${data.amount_native} ${nativeSymbol()} | Gas: ${data.gas_used} | ${data.execution_ms}ms | <a href="${explorerTxUrl(data.tx_hash)}" target="_blank" style="color:#02c076;text-decoration:underline;">${(data.tx_hash||'').slice(0,14)}…</a>`, "opportunity");
+            case "backend_buy_executed": {
+                const mevTag = data.mev_protected ? ` 🛡️MEV(${data.mev_strategy||'private'})` : '';
+                addFeedHTML(`⚡ <strong>BACKEND BUY</strong>: ${data.symbol} — ${data.amount_native} ${nativeSymbol()}${mevTag} | Gas: ${data.gas_used} | ${data.execution_ms}ms | <a href="${explorerTxUrl(data.tx_hash)}" target="_blank" style="color:#02c076;text-decoration:underline;">${(data.tx_hash||'').slice(0,14)}…</a>`, "opportunity");
                 break;
+            }
 
             case "backend_buy_failed":
                 addFeed(`⚡ Backend buy FAILED for ${data.symbol}: ${data.error}`, "error");
@@ -1188,6 +1217,37 @@
         }
         if (state.resource_stats) {
             updateResourceBar(state.resource_stats);
+        }
+
+        // v6: sync module status chips
+        if (state.multi_dex_stats) {
+            const dexChip = document.getElementById("v6-dex-chip");
+            if (dexChip) {
+                dexChip.querySelector("span").textContent = state.multi_dex_stats.current_chain_dexes || 0;
+                dexChip.classList.toggle("active", state.multi_dex_stats.current_chain_dexes > 0);
+            }
+        }
+        if (state.ai_optimizer_stats) {
+            const aiChip = document.getElementById("v6-ai-chip");
+            if (aiChip) {
+                aiChip.querySelector("span").textContent = state.ai_optimizer_stats.regime || "—";
+                aiChip.classList.add("active");
+            }
+        }
+        if (state.copy_trader_stats) {
+            const copyChip = document.getElementById("v6-copy-chip");
+            if (copyChip) {
+                const wallets = state.copy_trader_stats.tracked_wallets || 0;
+                copyChip.querySelector("span").textContent = wallets > 0 ? wallets : "OFF";
+                copyChip.classList.toggle("active", wallets > 0);
+            }
+        }
+        if (state.mev_stats) {
+            const mevChip = document.getElementById("v6-mev-chip");
+            if (mevChip) {
+                mevChip.querySelector("span").textContent = "ON";
+                mevChip.classList.add("active");
+            }
         }
     }
 
@@ -1831,6 +1891,12 @@
             max_concurrent:    parseInt(setMaxConcurrent.value) || 5,
             block_range:       parseInt(setBlockRange.value)   || 5,
             poll_interval:     parseFloat(setPollInterval.value) || 1.5,
+            // v6 modules
+            enable_mev_protection: document.getElementById("set-mev-protection")?.checked || false,
+            enable_copy_trading:   document.getElementById("set-copy-trading")?.checked || false,
+            enable_multi_dex:      document.getElementById("set-multi-dex")?.checked ?? true,
+            enable_ai_optimizer:   document.getElementById("set-ai-optimizer")?.checked ?? true,
+            enable_backtesting:    document.getElementById("set-backtesting")?.checked || false,
         };
         sendWS({ action: "update_settings", settings });
         addFeed("Saving settings…", "system");

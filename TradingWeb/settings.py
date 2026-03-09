@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -38,6 +39,7 @@ INSTALLED_APPS = [
     'daphne',
     'channels',
     'corsheaders',
+    'django_celery_results',
     'trading',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -81,12 +83,32 @@ WSGI_APPLICATION = 'TradingWeb.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# ------------------------------------------------------------------ #
+#  Database — PostgreSQL (production) / SQLite (fallback)
+# ------------------------------------------------------------------ #
+_DB_ENGINE = os.environ.get('DB_ENGINE', 'sqlite3')
+
+if _DB_ENGINE == 'postgresql':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'tradingweb'),
+            'USER': os.environ.get('DB_USER', 'tradingweb'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'OPTIONS': {
+                'connect_timeout': 10,
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
@@ -131,11 +153,78 @@ STATICFILES_DIRS = [BASE_DIR / 'trading' / 'static']
 # ------------------------------------------------------------------ #
 ASGI_APPLICATION = 'TradingWeb.asgi.application'
 
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+# Use Redis if available, fall back to InMemory
+_REDIS_URL = os.environ.get('REDIS_URL', '')
+
+if _REDIS_URL:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [_REDIS_URL],
+                'capacity': 1500,
+                'expiry': 60,
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        },
+    }
+
+# ------------------------------------------------------------------ #
+#  Celery — Task queue (Redis broker)
+# ------------------------------------------------------------------ #
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', _REDIS_URL or 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = 'django-db'  # Store results in PostgreSQL
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 300          # 5 min hard limit
+CELERY_TASK_SOFT_TIME_LIMIT = 240     # 4 min soft limit
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1 # One task at a time per worker
+CELERY_TASK_ACKS_LATE = True          # Ack after task completes
+
+# ── Celery Beat schedule (periodic tasks) ──
+from celery.schedules import crontab  # noqa: E402
+CELERY_BEAT_SCHEDULE = {
+    'backtest-daily-summary': {
+        'task': 'trading.tasks.daily_backtest_summary',
+        'schedule': crontab(hour=0, minute=30),
+    },
+    'optimize-strategy-daily': {
+        'task': 'trading.tasks.run_strategy_optimization',
+        'schedule': crontab(hour=1, minute=0),
+    },
+    'cleanup-old-snapshots': {
+        'task': 'trading.tasks.cleanup_old_data',
+        'schedule': crontab(hour=3, minute=0),
     },
 }
+
+# ------------------------------------------------------------------ #
+#  Caches — Redis (production) / LocMem (fallback)
+# ------------------------------------------------------------------ #
+if _REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _REDIS_URL,
+            'OPTIONS': {
+                'db': 1,
+            },
+        },
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        },
+    }
 
 # ------------------------------------------------------------------ #
 #  CORS – allow frontend dev servers

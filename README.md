@@ -1,6 +1,6 @@
 # TradingWeb — Plataforma de Trading + Sniper Bot
 
-Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 16 módulos profesionales** (pump scoring 10 componentes, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking, dev reputation, unified risk engine, backend trade executor, resource monitoring, alerts multi-canal, performance metrics, **ML predictor, social sentiment, dynamic contract scanner, proxy/stress/volatility analysis**), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls con **22 capas de seguridad**.
+Plataforma web estilo Binance con autenticación Trust Wallet, trading en tiempo real (Binance WebSocket), y un **Sniper Bot** profesional que detecta nuevos tokens en BSC/ETH, los analiza con **5 APIs de seguridad + 21 módulos profesionales** (pump scoring 10 componentes, swap simulation, bytecode analysis, mempool listening, rug detection, smart money tracking, dev reputation, unified risk engine, backend trade executor, resource monitoring, alerts multi-canal, performance metrics, **ML predictor, social sentiment, dynamic contract scanner, proxy/stress/volatility analysis**, **MEV protection, copy trading, multi-DEX routing, AI strategy optimizer, backtesting engine**), ejecuta compras/ventas automáticas con TP/SL, y protege contra rug pulls con **25 capas de seguridad**.
 
 ---
 
@@ -55,6 +55,14 @@ Esto instalará:
 | `PyJWT 2.11.0` + `passlib 1.7.4` | Autenticación Trust Wallet |
 | `requests 2.32.5` | Peticiones HTTP síncronas |
 | `websockets 15.0.1` | Conexión WebSocket a Binance + Sync listener |
+| `channels-redis 4.2.1` | Redis channel layer backend |
+| `celery[redis] 5.4.0` | Task queue para trabajos asíncronos |
+| `django-celery-results 2.5.1` | Almacenamiento de resultados Celery |
+| `redis 5.3.0` | Cliente Redis |
+| `numpy 2.2.3` | Computación numérica (ML) |
+| `scikit-learn 1.6.1` | Machine Learning models |
+| `pandas 2.2.3` | Data analysis |
+| `flashbots 2.1.1` | MEV protection (Flashbots relay) |
 | `psycopg2-binary 2.9.11` | PostgreSQL (opcional, usa SQLite por defecto) |
 | `pycryptodome 3.23.0` | Criptografía para firmas de wallet |
 
@@ -77,6 +85,22 @@ SNIPER_EMAIL_PASSWORD=app_password
 
 # Backend Trade Executor (opcional, avanzado)
 SNIPER_PRIVATE_KEY=0x...
+
+# v6: PostgreSQL (opcional, sin esto usa SQLite)
+DB_ENGINE=sqlite3
+DB_NAME=tradingweb
+DB_USER=postgres
+DB_PASSWORD=yourpassword
+DB_HOST=127.0.0.1
+DB_PORT=5432
+
+# v6: Redis (opcional, sin esto usa InMemory)
+REDIS_URL=redis://127.0.0.1:6379/0
+CELERY_BROKER_URL=redis://127.0.0.1:6379/1
+
+# v6: MEV Protection
+FLASHBOTS_SIGNER_KEY=0x...
+BSC_48CLUB_URL=https://api.48.club/api/v1/private
 ```
 
 ### 5. Aplicar migraciones
@@ -99,7 +123,7 @@ Debería mostrar: `System check identified no issues.`
 python manage.py test trading.tests -v 2
 ```
 
-130 tests automatizados cubriendo todos los módulos (iniciales) + 36 tests v5 = **166 tests totales**.
+130 tests automatizados cubriendo todos los módulos (iniciales) + 36 tests v5 + 138 tests v6 = **304 tests totales**.
 
 ---
 
@@ -150,7 +174,7 @@ http://127.0.0.1:8000/
 
 ## 🎯 Sniper Bot — Resumen
 
-### Pipeline completo (v5)
+### Pipeline completo (v6)
 
 ```
 Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5 APIs)
@@ -163,13 +187,29 @@ Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5
   ├─ Anomaly Detection (volume spike / holder explosion / buy-sell ratio)
   ├─ Whale Activity Analysis (coordinated buying / dev dumping)
   └─ Volatility Slippage (dynamic recommendation)
+→ v6 Pipeline:
+  ├─ MEV Threat Analysis (frontrun/sandwich risk, bot detection)
+  ├─ Multi-DEX Route Finding (best price across 5 chains, 15+ DEXes)
+  └─ AI Market Regime Detection (bull/bear/sideways/volatile)
+→ Dynamic Contract Scanner (background continuous monitoring)
+→ Buy Gating (25 capas) → snipe_opportunity
+→ MEV-Protected Auto-Buy (Flashbots/48Club/gas boost/tx split) → P&L Monitor
+→ Copy Trading (whale wallet following) → Rug Detector → Auto-Sell (TP/SL/Time)
+→ AI Strategy Optimizer (regime-adaptive parameters) → Backtesting Engine
+→ Resource Monitor → Alert Service → Metrics Dashboard
+```
+  ├─ ML Pump/Dump Predictor (feature-weighted scoring + online learning)
+  ├─ Social Sentiment (Twitter/Telegram/Discord/Reddit)
+  ├─ Anomaly Detection (volume spike / holder explosion / buy-sell ratio)
+  ├─ Whale Activity Analysis (coordinated buying / dev dumping)
+  └─ Volatility Slippage (dynamic recommendation)
 → Dynamic Contract Scanner (background continuous monitoring)
 → Buy Gating (22 capas) → snipe_opportunity
 → Auto-Buy (ethers.js) → P&L Monitor → Rug Detector → Auto-Sell (TP/SL/Time)
 → Resource Monitor → Alert Service → Metrics Dashboard
 ```
 
-### 16 Módulos Profesionales
+### 21 Módulos Profesionales
 
 | Módulo | Archivo | Versión | Descripción |
 |---|---|---|---|
@@ -188,9 +228,14 @@ Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5
 | 🤖 ML Predictor | `mlPredictor.py` | v5 | **Pump/Dump predictor** + **dev reputation ML** + **anomaly detector** |
 | 📱 Social Sentiment | `socialSentiment.py` | v5 | **Multi-platform sentiment** (Twitter/Telegram/Discord/Reddit) |
 | 🔬 Dynamic Scanner | `dynamicContractScanner.py` | v5 | **Continuous contract monitoring** (bytecode/tax/owner changes) |
+| 🛡️ MEV Protector | `mevProtection.py` | v6 | **Anti-sandwich/frontrun** (Flashbots, 48Club, gas boost, tx split) |
+| 📋 Copy Trader | `copyTrader.py` | v6 | **Whale wallet following** (auto-copy buys/sells, smart money signals) |
+| 🌐 Multi-DEX Router | `multiDexRouter.py` | v6 | **Best route** across 5 chains, 15+ DEXes (PancakeSwap, Uniswap, SushiSwap...) |
+| 🧠 AI Strategy Optimizer | `strategyOptimizer.py` | v6 | **ML-powered parameter tuning** + market regime detection |
+| 📉 Backtest Engine | `backtestEngine.py` | v6 | **Historical simulation** with virtual portfolio + P&L analysis |
 | 🧬 Wallet Service | `walletService.py` | v1 | Wallet logic |
 
-**Motor principal:** `sniperService.py` — **2,738 líneas** (ContractAnalyzer + SniperBot + main loop + enrichment)
+**Motor principal:** `sniperService.py` — **~3,360 líneas** (ContractAnalyzer + SniperBot + main loop + enrichment + v6 integration)
 
 ### 5 APIs de seguridad
 
@@ -221,7 +266,7 @@ Mempool → Pre-Launch → Block Scanner → PairCreated → ContractAnalyzer (5
 
 Cada componente tiene try/except individual con fallback neutral (40) — un componente que falla NO rompe el score total.
 
-### 22 capas de seguridad anti rug-pull
+### 25 capas de seguridad anti rug-pull
 
 ```
  1. 5 APIs de seguridad → detecta 18+ flags peligrosos
@@ -246,6 +291,9 @@ Cada componente tiene try/except individual con fallback neutral (40) — un com
 20. v5: ML Pump/Dump Gate → bloquea si ML score < 30 o "danger"
 21. v5: Anomaly Gate → bloquea si anomaly score ≥ 0.8
 22. v5: Whale Dev-Dump Gate → bloquea si dev wallet dumping detected
+23. v6: MEV Critical Gate → bloquea tokens con threat_level "critical"
+24. v6: MEV Sandwich Gate → bloquea si sandwich_risk > 70%
+25. v6: MEV-Protected Execution → Flashbots/48Club/gas boost para evitar frontrunning
 ```
 
 ### Enrichment inteligente (anti-spam)
@@ -276,9 +324,10 @@ TradingWeb/
 ├── README.md                       # Este archivo
 │
 ├── TradingWeb/                     # Configuración Django
-│   ├── settings.py                 # Settings (DB, apps, channels, CORS)
+│   ├── settings.py                 # Settings (DB, apps, channels, CORS, Celery)
 │   ├── urls.py                     # URL routing principal
 │   ├── asgi.py                     # ASGI config (Channels + WebSocket)
+│   ├── celery.py                   # Celery app factory [NEW v6]
 │   └── wsgi.py                     # WSGI fallback
 │
 ├── trading/                        # App principal
@@ -293,8 +342,8 @@ TradingWeb/
 │   │   ├── urls.py                 # URL patterns de la app
 │   │   └── walletRouter.py         # Rutas API wallet
 │   │
-│   ├── Services/                   # 16 módulos profesionales + core
-│   │   ├── sniperService.py        # 🎯 Motor del Sniper Bot (~3,100 líneas)
+│   ├── Services/                   # 21 módulos profesionales + core
+│   │   ├── sniperService.py        # 🎯 Motor del Sniper Bot (~3,360 líneas)
 │   │   ├── pumpAnalyzer.py         # 🚀 Pump scoring engine v3 (597 líneas)
 │   │   ├── swapSimulator.py        # 🧪 Swap sim + proxy/stress/volatility v5 (~1,084 líneas)
 │   │   ├── mempoolService.py       # 📡 Mempool listener (394 líneas)
@@ -307,9 +356,14 @@ TradingWeb/
 │   │   ├── resourceMonitor.py      # 📊 Resource monitor v4 (211 líneas)
 │   │   ├── alertService.py         # 🔔 Alert service v4 (404 líneas)
 │   │   ├── metricsService.py       # 📈 Metrics service v4 (329 líneas)
-│   │   ├── mlPredictor.py          # 🤖 ML predictor v5 (~620 líneas) [NEW]
-│   │   ├── socialSentiment.py      # 📱 Social sentiment v5 (~604 líneas) [NEW]
-│   │   ├── dynamicContractScanner.py # 🔬 Dynamic scanner v5 (~512 líneas) [NEW]
+│   │   ├── mlPredictor.py          # 🤖 ML predictor v5 (~620 líneas)
+│   │   ├── socialSentiment.py      # 📱 Social sentiment v5 (~604 líneas)
+│   │   ├── dynamicContractScanner.py # 🔬 Dynamic scanner v5 (~512 líneas)
+│   │   ├── mevProtection.py        # 🛡️ MEV protector v6 (~500 líneas) [NEW]
+│   │   ├── copyTrader.py           # 📋 Copy trader v6 (~460 líneas) [NEW]
+│   │   ├── multiDexRouter.py       # 🌐 Multi-DEX router v6 (~470 líneas) [NEW]
+│   │   ├── strategyOptimizer.py    # 🧠 AI strategy optimizer v6 (~500 líneas) [NEW]
+│   │   ├── backtestEngine.py       # 📉 Backtest engine v6 (~430 líneas) [NEW]
 │   │   └── walletService.py        # Wallet logic (139 líneas)
 │   │
 │   ├── WebSocket/
@@ -335,7 +389,7 @@ TradingWeb/
 │   │   ├── transactions.html       # Transacciones (123 líneas)
 │   │   └── login.html              # Login Trust Wallet (63 líneas)
 │   │
-│   └── tests/                      # 166 tests automatizados
+│   └── tests/                      # 304 tests automatizados
 │       ├── test_sniperService.py   # 36 tests — bot init, settings, state
 │       ├── test_alertService.py    # 27 tests — events, rate limiting, send
 │       ├── test_riskEngine.py      # 14 tests — weights, hard stops, scoring
@@ -343,7 +397,8 @@ TradingWeb/
 │       ├── test_pumpAnalyzer.py    # 15 tests — 10 components, stats
 │       ├── test_resourceMonitor.py # 16 tests — CPU, WS, RPC tracking
 │       ├── test_rugDetector.py     # 6 tests — alert levels, triggers
-│       └── test_v5_modules.py      # 36 tests — ML, proxy, social, scanner [NEW]
+│       ├── test_v5_modules.py      # 36 tests — ML, proxy, social, scanner
+│       └── test_v6_modules.py      # 138 tests — MEV, copy trading, multi-DEX, AI, backtest [NEW]
 │
 ├── docs/
 │   ├── SNIPER.md                   # Documentación técnica del Sniper Bot
@@ -353,7 +408,7 @@ TradingWeb/
     └── sniper_alerts.log
 ```
 
-**Totales:** ~22,000+ líneas de código fuente (backend + frontend + tests + styles + templates)
+**Totales:** ~27,000+ líneas de código fuente (backend + frontend + tests + styles + templates)
 
 ---
 
@@ -408,6 +463,11 @@ El bot usa RPCs públicos (sin API key) con rotación automática y backoff expo
 | `enable_anomaly_detector` | ✅ | v5: Unusual activity detection |
 | `enable_whale_activity` | ✅ | v5: Whale buy/sell/concentration |
 | `enable_dynamic_scanner` | ✅ | v5: Continuous contract monitoring |
+| `enable_mev_protection` | ❌ | v6: Anti-sandwich/frontrun MEV protection |
+| `enable_copy_trading` | ❌ | v6: Copy whale wallets (experimental) |
+| `enable_multi_dex` | ✅ | v6: Multi-DEX best route (5 chains) |
+| `enable_ai_optimizer` | ✅ | v6: AI-powered parameter optimization |
+| `enable_backtesting` | ❌ | v6: Historical strategy backtesting |
 
 ### User Profiles (1-click)
 

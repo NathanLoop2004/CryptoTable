@@ -2753,3 +2753,65 @@ body.resizing-col *, body.resizing-row * {
     .effectiveness-row { gap: 3px; }
     .tutorial-card { width: 95vw; }
 }
+
+/* ═══════════════════════════════════════════════
+   v6 Module Styles
+   ═══════════════════════════════════════════════ */
+.v6-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+}
+.v6-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 3px 8px;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    transition: all 0.3s;
+}
+.v6-chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(240,185,11,0.08);
+}
+.v6-chip.danger {
+    border-color: #f6465d;
+    color: #f6465d;
+    background: rgba(246,70,93,0.08);
+}
+
+/* v6 token detail badges */
+.v6-badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+.v6-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 0.62rem;
+    font-weight: 500;
+}
+.v6-badge.mev-low { background: rgba(14,203,129,0.12); color: #0ecb81; }
+.v6-badge.mev-medium { background: rgba(240,185,11,0.12); color: #f0b90b; }
+.v6-badge.mev-high { background: rgba(246,70,93,0.12); color: #f6465d; }
+.v6-badge.mev-critical { background: rgba(246,70,93,0.25); color: #ff4d6a; }
+.v6-badge.dex { background: rgba(30,150,255,0.12); color: #1e96ff; }
+.v6-badge.ai { background: rgba(162,89,255,0.12); color: #a259ff; }
+.v6-badge.copy { background: rgba(14,203,129,0.12); color: #0ecb81; }
+
+/* Pipeline MEV step */
+#pipe-mev .pipe-icon { font-size: 1rem; }
+#pipe-mev.active { border-color: var(--accent); background: rgba(240,185,11,0.06); }
