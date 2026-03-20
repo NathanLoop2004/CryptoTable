@@ -417,9 +417,9 @@ class PredictiveLaunchScanner:
 
         if HAS_WEB3 and Web3:
             try:
-                self.PAIR_CREATED_TOPIC = "0x" + Web3.keccak(
+                self.PAIR_CREATED_TOPIC = Web3.keccak(
                     text="PairCreated(address,address,address,uint256)"
-                ).hex()
+                )
             except Exception:
                 pass
 
@@ -605,7 +605,7 @@ class PredictiveLaunchScanner:
                 "fromBlock": block_number,
                 "toBlock": block_number,
                 "address": Web3.to_checksum_address(self.config.factory_address),
-                "topics": [HexBytes(self.PAIR_CREATED_TOPIC)],
+                "topics": [self.PAIR_CREATED_TOPIC],
             })
 
             for log in logs:
@@ -613,7 +613,8 @@ class PredictiveLaunchScanner:
                 if len(log.get("topics", [])) >= 3:
                     token0 = "0x" + log["topics"][1].hex()[-40:]
                     token1 = "0x" + log["topics"][2].hex()[-40:]
-                    pair_address = "0x" + log["data"][:66].replace("0x", "")[-40:]
+                    # web3.py v7: log["data"] is HexBytes — first 32 bytes = padded pair address
+                    pair_address = "0x" + log["data"][:32].hex()[-40:]
 
                     # Check if we're tracking either token
                     for addr in [token0, token1]:

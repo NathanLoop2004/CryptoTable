@@ -1473,6 +1473,7 @@ class SniperBot:
 
         # Callback to push events to frontend
         self._event_callback = None
+        self._reanalyzing_token = None  # token address being re-analyzed (for progress events)
 
         # Native price (USD) — fetched periodically
         self.native_price_usd = 0
@@ -1521,13 +1522,39 @@ class SniperBot:
             await self._emit("error", {"message": f"Token not found in detected pairs"})
             return
 
-        logger.info(f"🔄 Re-analyzing token {pair.token_info.symbol if pair.token_info else token_address}")
+        symbol = pair.token_info.symbol if pair.token_info else token_address[:10]
+        logger.info(f"🔄 Re-analyzing token {symbol}")
+
+        # Set re-analysis tracking
+        self._reanalyzing_token = token_lower
+
+        await self._emit("reanalyze_progress", {
+            "token": token_address,
+            "symbol": symbol,
+            "step": "start",
+            "message": "Iniciando re-análisis completo…",
+            "progress": 0,
+        })
 
         # Remove old entry to avoid duplicates (pipeline will re-add)
         self.detected_pairs = [p for p in self.detected_pairs if p.new_token.lower() != token_lower]
 
         # Re-run the full pipeline
-        await self._process_pair(pair.pair_address, pair.token0, pair.token1, pair.block_number)
+        try:
+            await self._process_pair(pair.pair_address, pair.token0, pair.token1, pair.block_number)
+        except Exception as e:
+            logger.error(f"🔄 Re-analysis failed for {symbol}: {e}")
+        finally:
+            # Always clear flag and emit done
+            self._reanalyzing_token = None
+
+            await self._emit("reanalyze_progress", {
+                "token": token_address,
+                "symbol": symbol,
+                "step": "done",
+                "message": "Re-análisis completado ✓",
+                "progress": 100,
+            })
 
     # ─── Price fetcher ──────────────────────────────────────
     async def _safe_get_block_number(self) -> int:
@@ -2084,6 +2111,17 @@ class SniperBot:
             "block": block,
         })
 
+        # Progress helper for re-analysis
+        _is_reanalyze = self._reanalyzing_token and self._reanalyzing_token == new_token.lower()
+        async def _progress(step, msg, pct):
+            if _is_reanalyze:
+                await self._emit("reanalyze_progress", {
+                    "token": new_token, "symbol": "", "step": step,
+                    "message": msg, "progress": pct,
+                })
+
+        await _progress("base", "Analizando contrato + liquidez…", 5)
+
         # Run analysis + liquidity check IN PARALLEL (biggest speed-up)
         token_info_task = asyncio.ensure_future(self.analyzer.analyze(new_token))
         liquidity_task = asyncio.ensure_future(self._get_pair_liquidity(pair_address))
@@ -2100,6 +2138,8 @@ class SniperBot:
         new_pair.liquidity_usd = usd_liq
 
         has_liquidity = usd_liq >= self.settings["min_liquidity_usd"]
+
+        await _progress("base_done", f"Contrato: {token_info.symbol} — Liquidez: ${usd_liq:,.0f}", 15)
 
         await self._emit("liquidity_check", {
             "token": new_token,
@@ -2151,6 +2191,8 @@ class SniperBot:
             await self._emit("scan_info", {
                 "message": f"⏩ {token_info.symbol}: honeypot confirmed, heavy analysis skipped",
             })
+
+        await _progress("v2", "Pump Score, Swap Simulation, Bytecode, Smart Money…", 25)
 
         try:
             v2_tasks = []
@@ -2219,6 +2261,8 @@ class SniperBot:
                         )
 
                 # (v3 pump fields already extracted above — no redundant double call)
+
+                await _progress("v3", "Dev Tracker + Risk Engine…", 40)
 
                 # ── Professional v3: Dev Tracker ──
                 dev_result = None
@@ -2297,6 +2341,8 @@ class SniperBot:
                 if self.settings.get("enable_trade_executor", False) and self.trade_executor:
                     token_info.backend_buy_available = True
 
+                await _progress("v2v3_done", f"Pump={token_info.pump_score}({token_info.pump_grade}) Risk={token_info.risk_engine_score}({token_info.risk_engine_action})", 50)
+
                 # Re-emit token_detected with updated v2+v3 data (always, not just liquid)
                 await self._emit("token_detected",
                     self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
@@ -2319,6 +2365,8 @@ class SniperBot:
             logger.info(f"⏩ Priority gate: skipping v5/v6/v7 analysis — {token_info.symbol} confirmed HONEYPOT")
 
         try:
+            await _progress("v5", "Proxy, Stress Test, ML, Sentimiento, Anomalías, Ballenas…", 55)
+
             v5_tasks = []
 
             # Proxy detection (async)
@@ -2463,6 +2511,8 @@ class SniperBot:
                     except Exception as e:
                         logger.debug(f"Dynamic scanner registration failed: {e}")
 
+                await _progress("v5_done", f"ML={token_info.ml_pump_score}({token_info.ml_pump_label}) Social={token_info.social_sentiment_score}", 70)
+
                 # Re-emit with v5 data
                 await self._emit("token_detected",
                     self._build_token_event_data(new_token, pair_address, token_info, native_liq, usd_liq, has_liquidity, block)
@@ -2482,6 +2532,8 @@ class SniperBot:
         # ═══════════════════════════════════════════════════════
         #  v6 Analysis Pipeline — MEV, Multi-DEX, AI Optimizer
         # ═══════════════════════════════════════════════════════
+        await _progress("v6", "MEV Protection, Multi-DEX Routing, AI Optimizer…", 75)
+
         try:
             # v6: MEV threat analysis
             if self.settings.get("enable_mev_protection", False) and not _skip_heavy:
@@ -2516,10 +2568,32 @@ class SniperBot:
                 try:
                     regime = self.strategy_optimizer.detect_market_regime()
                     token_info.ai_regime = regime.regime
-                    suggestion = self.strategy_optimizer.get_suggestion()
-                    if suggestion.get("proposed_params"):
-                        token_info.ai_suggested_tp = suggestion["proposed_params"].get("take_profit_pct", 0)
-                        token_info.ai_suggested_sl = suggestion["proposed_params"].get("stop_loss_pct", 0)
+
+                    # Fallback: use token-level signals when no trade history
+                    if regime.regime == "unknown":
+                        regime, suggestion = self.strategy_optimizer.detect_regime_from_token(
+                            pump_score=token_info.pump_score,
+                            risk_score=token_info.risk_engine_score,
+                            liquidity_usd=usd_liq,
+                            volatility_score=token_info.volatility_score,
+                            ml_pump_score=token_info.ml_pump_score,
+                            sim_is_honeypot=token_info.sim_is_honeypot,
+                            sim_sell_tax=token_info.sim_sell_tax,
+                            price_change_h1=token_info.dexscreener_price_change_h1,
+                            price_change_h24=token_info.dexscreener_price_change_h24,
+                            whale_net_flow=token_info.whale_net_flow,
+                            smart_money_buyers=token_info.smart_money_buyers,
+                            anomaly_score=token_info.anomaly_score,
+                        )
+                        token_info.ai_regime = regime.regime
+                        if suggestion.get("proposed_params"):
+                            token_info.ai_suggested_tp = suggestion["proposed_params"].get("take_profit_pct", 0)
+                            token_info.ai_suggested_sl = suggestion["proposed_params"].get("stop_loss_pct", 0)
+                    else:
+                        suggestion = self.strategy_optimizer.get_suggestion()
+                        if suggestion.get("proposed_params"):
+                            token_info.ai_suggested_tp = suggestion["proposed_params"].get("take_profit_pct", 0)
+                            token_info.ai_suggested_sl = suggestion["proposed_params"].get("stop_loss_pct", 0)
                 except Exception as e:
                     logger.debug(f"AI optimizer context failed: {e}")
 
@@ -2540,6 +2614,8 @@ class SniperBot:
         #  v7 Analysis Pipeline — RL, Orderflow, Simulator,
         #  Strategy, Launch Scanner, Mempool v7, Whale Graph
         # ═══════════════════════════════════════════════════════
+        await _progress("v7", "RL, Orderflow, Simulador, Estrategia, Mempool, Whale Graph…", 85)
+
         try:
             v7_tasks = []
 
@@ -2702,6 +2778,8 @@ class SniperBot:
                             token_info.whale_smart_money_sentiment = data.get("smart_money_sentiment", "neutral")
                             token_info.whale_network_clusters = data.get("cluster_count", 0)
                             token_info._whale_network_ok = True
+
+            await _progress("v7_done", f"RL={token_info.rl_decision} Orderflow={token_info.orderflow_organic_score:.0f}", 95)
 
             # Re-emit with v7 data
             await self._emit("token_detected",

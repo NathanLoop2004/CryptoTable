@@ -623,6 +623,16 @@
             <div class="modal-body" id="log-modal-body" style="padding:12px;overflow-y:auto;">
                 <!-- buildTokenLogCard HTML goes here -->
             </div>
+            <!-- Re-analyze loading overlay (outside modal-body so innerHTML doesn't destroy it) -->
+            <div class="reanalyze-overlay" id="reanalyze-overlay" style="display:none;">
+                <div class="reanalyze-spinner"></div>
+                <h3 class="reanalyze-title" id="reanalyze-title">🔄 Re-Analizando Token</h3>
+                <div class="reanalyze-bar-wrap">
+                    <div class="reanalyze-bar" id="reanalyze-bar" style="width:0%"></div>
+                </div>
+                <div class="reanalyze-pct" id="reanalyze-pct">0%</div>
+                <ul class="reanalyze-steps" id="reanalyze-steps"></ul>
+            </div>
         </div>
     </div>
 

@@ -339,6 +339,176 @@ class StrategyOptimizer:
         return regime
 
     # ───────────────────────────────────────────────────────
+    #  Fallback regime detection from token-level signals
+    # ───────────────────────────────────────────────────────
+
+    def detect_regime_from_token(
+        self,
+        *,
+        pump_score: int = 0,
+        risk_score: int = 0,
+        liquidity_usd: float = 0,
+        volatility_score: float = 0,
+        ml_pump_score: int = 0,
+        sim_is_honeypot: bool = False,
+        sim_sell_tax: float = 0,
+        price_change_h1: float = 0,
+        price_change_h24: float = 0,
+        whale_net_flow: float = 0,
+        smart_money_buyers: int = 0,
+        anomaly_score: float = 0,
+    ) -> tuple[MarketRegime, dict]:
+        """
+        Estimate market regime and suggest TP/SL from token-level data
+        when no trade history is available.
+
+        Returns (MarketRegime, suggestion_dict).
+        """
+        regime = MarketRegime()
+        regime.volatility_index = volatility_score
+
+        # ── Scoring signals ──
+        bull_signals = 0
+        bear_signals = 0
+        total_weight = 0
+
+        # Pump score (0-100): strong buy signal
+        if pump_score >= 70:
+            bull_signals += 3
+        elif pump_score >= 50:
+            bull_signals += 1
+        elif pump_score < 25:
+            bear_signals += 1
+        total_weight += 3
+
+        # Risk score (higher = safer)
+        if risk_score >= 70:
+            bull_signals += 2
+        elif risk_score >= 40:
+            bull_signals += 1
+        elif risk_score < 20:
+            bear_signals += 2
+        total_weight += 2
+
+        # Liquidity
+        if liquidity_usd >= 50000:
+            bull_signals += 2
+        elif liquidity_usd >= 10000:
+            bull_signals += 1
+        elif liquidity_usd < 3000:
+            bear_signals += 1
+        total_weight += 2
+
+        # ML pump prediction
+        if ml_pump_score >= 70:
+            bull_signals += 2
+        elif ml_pump_score < 30:
+            bear_signals += 1
+        total_weight += 2
+
+        # Honeypot / high sell tax
+        if sim_is_honeypot:
+            bear_signals += 4
+        elif sim_sell_tax > 15:
+            bear_signals += 2
+        elif sim_sell_tax > 8:
+            bear_signals += 1
+        total_weight += 4
+
+        # Price momentum
+        if price_change_h1 > 20:
+            bull_signals += 1
+        elif price_change_h1 < -15:
+            bear_signals += 1
+        total_weight += 1
+
+        # Whale flow
+        if whale_net_flow > 0 and smart_money_buyers >= 2:
+            bull_signals += 1
+        elif whale_net_flow < 0:
+            bear_signals += 1
+        total_weight += 1
+
+        # Anomaly
+        if anomaly_score > 0.7:
+            bear_signals += 1
+        total_weight += 1
+
+        # ── Classify ──
+        net = bull_signals - bear_signals
+        confidence = min(0.85, abs(net) / max(total_weight, 1))
+
+        if sim_is_honeypot:
+            regime.regime = "bear"
+            confidence = max(confidence, 0.8)
+        elif volatility_score > 60:
+            regime.regime = "volatile"
+            confidence = max(confidence, 0.5)
+        elif net >= 4:
+            regime.regime = "bull"
+        elif net <= -3:
+            regime.regime = "bear"
+        elif volatility_score > 35:
+            regime.regime = "volatile"
+        else:
+            regime.regime = "sideways"
+            confidence = max(confidence, 0.4)
+
+        regime.confidence = round(confidence, 2)
+        self._market_regime = regime
+
+        # ── Suggest TP/SL based on regime ──
+        tp_sl = self._suggest_tp_sl(regime, liquidity_usd, volatility_score, pump_score)
+
+        logger.info(
+            f"AI fallback: regime={regime.regime} conf={regime.confidence:.2f} "
+            f"tp={tp_sl.get('take_profit_pct', 0):.0f}% sl={tp_sl.get('stop_loss_pct', 0):.0f}%"
+        )
+
+        suggestion = {
+            "status": "token_estimate",
+            "message": f"Estimación basada en señales del token (régimen: {regime.regime})",
+            "proposed_params": tp_sl,
+            "confidence": f"{regime.confidence:.0%}",
+        }
+        return regime, suggestion
+
+    def _suggest_tp_sl(
+        self,
+        regime: MarketRegime,
+        liquidity_usd: float,
+        volatility_score: float,
+        pump_score: int,
+    ) -> dict:
+        """Produce TP/SL recommendations adapted to regime and token quality."""
+        # Base values per regime
+        base = {
+            "bull":     {"take_profit_pct": 80, "stop_loss_pct": 15},
+            "bear":     {"take_profit_pct": 25, "stop_loss_pct": 8},
+            "volatile": {"take_profit_pct": 50, "stop_loss_pct": 12},
+            "sideways": {"take_profit_pct": 35, "stop_loss_pct": 10},
+            "unknown":  {"take_profit_pct": 40, "stop_loss_pct": 15},
+        }
+        params = dict(base.get(regime.regime, base["unknown"]))
+
+        # Adjust for high pump potential
+        if pump_score >= 80:
+            params["take_profit_pct"] = min(200, params["take_profit_pct"] * 1.5)
+
+        # Adjust for low liquidity (tighter stops)
+        if liquidity_usd < 5000:
+            params["stop_loss_pct"] = max(5, params["stop_loss_pct"] * 0.7)
+            params["take_profit_pct"] *= 0.8
+
+        # Adjust for high volatility (wider stops)
+        if volatility_score > 50:
+            params["stop_loss_pct"] = min(30, params["stop_loss_pct"] * 1.3)
+
+        params["take_profit_pct"] = round(params["take_profit_pct"], 1)
+        params["stop_loss_pct"] = round(params["stop_loss_pct"], 1)
+        return params
+
+    # ───────────────────────────────────────────────────────
     #  ML Model training
     # ───────────────────────────────────────────────────────
 

@@ -395,7 +395,12 @@ class SwapSimulator:
             return True, expected_tokens, "", gas
 
         except Exception as e:
-            err_msg = str(e)[:200]
+            raw = str(e)
+            if "execution reverted" in raw:
+                idx = raw.find(": 0x")
+                err_msg = raw[:idx] if idx > 0 else raw[:120]
+            else:
+                err_msg = raw[:120]
             logger.debug(f"Buy simulation failed: {err_msg}")
 
             # Try the non-fee version
@@ -501,7 +506,17 @@ class SwapSimulator:
             return True, expected_eth, "", gas
 
         except Exception as e:
-            err_msg = str(e)[:200]
+            raw = str(e)
+            # Extract human-readable revert reason, strip hex payload
+            if "execution reverted" in raw:
+                # Keep only "execution reverted: REASON" without hex data
+                idx = raw.find(": 0x")
+                if idx > 0:
+                    err_msg = raw[:idx]
+                else:
+                    err_msg = raw[:120]
+            else:
+                err_msg = raw[:120]
             logger.debug(f"Sell simulation failed ({token_cs}): {err_msg}")
             return False, 0, err_msg, 0
 

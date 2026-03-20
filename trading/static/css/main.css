@@ -1896,6 +1896,7 @@ body.resizing-col *, body.resizing-row * {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
     animation: slideUp .2s ease;
 }
 @keyframes slideUp {
@@ -2219,6 +2220,95 @@ body.resizing-col *, body.resizing-row * {
 @keyframes reanalyze-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: .5; }
+}
+
+/* ═══ Re-Analyze Loading Overlay ═══ */
+.reanalyze-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 50;
+    background: #12151c;
+    border-radius: 12px;
+    padding: 32px 24px 24px;
+    overflow-y: auto;
+}
+.reanalyze-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255,255,255,.08);
+    border-top-color: #36a2eb;
+    border-radius: 50%;
+    animation: ra-spin 0.8s linear infinite;
+    margin-bottom: 18px;
+}
+@keyframes ra-spin {
+    to { transform: rotate(360deg); }
+}
+.reanalyze-title {
+    color: #e0e0e0;
+    font-size: 1.1em;
+    margin: 0 0 16px;
+    font-weight: 600;
+}
+.reanalyze-bar-wrap {
+    width: 100%;
+    max-width: 400px;
+    height: 8px;
+    background: rgba(255,255,255,.06);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+.reanalyze-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #36a2eb, #02c076);
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}
+.reanalyze-pct {
+    color: #8a8f98;
+    font-size: .85em;
+    margin-bottom: 20px;
+}
+.reanalyze-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    max-width: 420px;
+}
+.reanalyze-steps li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    font-size: .88em;
+    color: #8a8f98;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.reanalyze-steps li:last-child { border-bottom: none; }
+.reanalyze-steps li .ra-icon {
+    font-size: 1em;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+}
+.reanalyze-steps li.ra-active { color: #36a2eb; font-weight: 500; }
+.reanalyze-steps li.ra-done { color: #02c076; }
+.reanalyze-steps li.ra-done .ra-icon::after { content: '✓'; }
+.reanalyze-steps li.ra-active .ra-icon::after { content: '⏳'; }
+.reanalyze-steps li.ra-pending .ra-icon::after { content: '○'; }
+.reanalyze-steps li .ra-detail {
+    font-size: .82em;
+    color: #6a6f78;
+    margin-left: 30px;
+    display: block;
 }
 
 /* ═══ Token Chart Modal ═══ */

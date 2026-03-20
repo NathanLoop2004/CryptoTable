@@ -937,6 +937,77 @@
                 // Already shown in token_detected log card — skip duplicate
                 break;
 
+            case "reanalyze_progress":
+                {
+                    const ov  = document.getElementById("reanalyze-overlay");
+                    const bar = document.getElementById("reanalyze-bar");
+                    const pct = document.getElementById("reanalyze-pct");
+                    const ul  = document.getElementById("reanalyze-steps");
+                    const ttl = document.getElementById("reanalyze-title");
+                    if (!ov) break;
+
+                    const STEP_LABELS = {
+                        start:    "Iniciando re-análisis",
+                        base:     "Contrato ERC-20 + Liquidez",
+                        base_done:"Contrato + Liquidez ✓",
+                        v2:       "Pump Score, Swap Sim, Bytecode, Smart Money",
+                        v3:       "Dev Tracker + Risk Engine",
+                        v2v3_done:"Análisis v2+v3 ✓",
+                        v5:       "Proxy, Stress, ML, Sentimiento, Ballenas",
+                        v5_done:  "Análisis v5 ✓",
+                        v6:       "MEV, Multi-DEX, AI Optimizer",
+                        v7:       "RL, Orderflow, Simulador, Mempool, Whale Graph",
+                        v7_done:  "Análisis v7 ✓",
+                        done:     "Re-análisis completado ✓",
+                    };
+
+                    if (data.step === "start") {
+                        // Overlay already shown by click handler, just update title
+                        ov.style.display = "flex";
+                        if (ttl) ttl.textContent = `🔄 Re-Analizando ${data.symbol || ""}`;
+                    }
+
+                    // Update progress bar
+                    if (bar) bar.style.width = data.progress + "%";
+                    if (pct) pct.textContent = data.progress + "%";
+
+                    // Add step to list
+                    const label = STEP_LABELS[data.step] || data.step;
+                    const detail = data.message || "";
+
+                    // Mark previous active step as done
+                    const prev = ul.querySelector("li.ra-active");
+                    if (prev) {
+                        prev.classList.remove("ra-active");
+                        prev.classList.add("ra-done");
+                    }
+
+                    const li = document.createElement("li");
+                    li.className = data.step === "done" ? "ra-done" : "ra-active";
+                    li.innerHTML = `<span class="ra-icon"></span><span>${label}</span>`;
+                    if (detail && data.step !== "start") {
+                        li.innerHTML += `<span class="ra-detail">${detail}</span>`;
+                    }
+                    ul.appendChild(li);
+                    li.scrollIntoView({ block: "nearest" });
+
+                    // Done → hide overlay after short delay, show results
+                    if (data.step === "done") {
+                        if (ttl) ttl.textContent = "✅ Re-análisis completado";
+                        setTimeout(() => {
+                            ov.style.display = "none";
+                            // Reset reanalyze button
+                            const raBtn = document.getElementById("btn-log-reanalyze");
+                            if (raBtn) {
+                                raBtn.disabled = false;
+                                raBtn.textContent = "🔄 Re-Analizar";
+                                raBtn.classList.remove("loading");
+                            }
+                        }, 1500);
+                    }
+                }
+                break;
+
             case "token_updated":
                 {
                     console.log("[TOKEN_UPDATED]", data.symbol, {
@@ -1431,9 +1502,10 @@
             afBtn.textContent = _logAutoFollow ? "⏩ Auto" : "⏸ Auto";
         }
 
-        // Reset re-analyze button when new data arrives
+        // Reset re-analyze button when new data arrives (but NOT during active re-analysis)
         const raBtn = document.getElementById("btn-log-reanalyze");
-        if (raBtn && raBtn.disabled) {
+        const raOv  = document.getElementById("reanalyze-overlay");
+        if (raBtn && raBtn.disabled && (!raOv || raOv.style.display === "none")) {
             raBtn.disabled = false;
             raBtn.textContent = "🔄 Re-Analizar";
             raBtn.classList.remove("loading");
@@ -2135,13 +2207,30 @@
                 btnLogAutoFollow.classList.remove("active");
                 btnLogAutoFollow.textContent = "⏸ Auto";
             }
+            // Show overlay immediately (don't wait for backend WS)
+            const ov = document.getElementById("reanalyze-overlay");
+            const ul = document.getElementById("reanalyze-steps");
+            const bar = document.getElementById("reanalyze-bar");
+            const pctEl = document.getElementById("reanalyze-pct");
+            const ttl = document.getElementById("reanalyze-title");
+            if (ov) {
+                if (ul) ul.innerHTML = "";
+                if (bar) bar.style.width = "0%";
+                if (pctEl) pctEl.textContent = "0%";
+                if (ttl) ttl.textContent = "🔄 Re-Analizando Token…";
+                ov.style.display = "flex";
+            }
             sendWS({ action: "re_analyze_token", token: _logModalAddr });
-            // Re-enable after timeout (analysis takes ~10-30s)
+            // Safety timeout — re-enable button if backend doesn't respond
             setTimeout(() => {
-                btnLogReanalyze.disabled = false;
-                btnLogReanalyze.textContent = "🔄 Re-Analizar";
-                btnLogReanalyze.classList.remove("loading");
-            }, 60000);
+                if (btnLogReanalyze.disabled) {
+                    btnLogReanalyze.disabled = false;
+                    btnLogReanalyze.textContent = "🔄 Re-Analizar";
+                    btnLogReanalyze.classList.remove("loading");
+                    const ov = document.getElementById("reanalyze-overlay");
+                    if (ov) ov.style.display = "none";
+                }
+            }, 90000);
         });
     }
 
