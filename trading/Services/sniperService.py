@@ -55,8 +55,12 @@ from enum import Enum
 from typing import Optional
 
 from web3 import Web3, AsyncWeb3
+from web3.middleware import ExtraDataToPOAMiddleware
 from web3.providers import WebSocketProvider
 import aiohttp
+
+# POA chains (BSC, Polygon, etc.) need ExtraDataToPOAMiddleware
+POA_CHAIN_IDS = {56, 97, 137, 80001}
 
 # ── Professional modules ──
 from trading.Services.pumpAnalyzer import PumpAnalyzer, PumpScore
@@ -121,9 +125,7 @@ RPC_ENDPOINTS = {
 RPC_FALLBACKS = {
     56: [
         "https://bsc-rpc.publicnode.com",
-        "https://binance.llamarpc.com",
         "https://bsc-pokt.nodies.app",
-        "https://bsc.meowrpc.com",
         "https://bsc.drpc.org",
         "https://bsc-dataseed1.binance.org",
         "https://bsc-dataseed2.binance.org",
@@ -1370,6 +1372,8 @@ class SniperBot:
         self._rpc_list = RPC_FALLBACKS.get(chain_id, [rpc_info["http"]])
         self._rpc_index = 0
         self.w3 = Web3(Web3.HTTPProvider(self._rpc_list[0]))
+        if chain_id in POA_CHAIN_IDS:
+            self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
         # Shared aiohttp session (created/closed in run())
         self._http_session: aiohttp.ClientSession | None = None
@@ -1502,6 +1506,29 @@ class SniperBot:
             except Exception as e:
                 logger.debug(f"Event callback error: {e}")
 
+    async def re_analyze_token(self, token_address: str):
+        """Re-run full analysis pipeline for a previously detected token."""
+        token_lower = token_address.lower()
+
+        # Find the pair in detected_pairs
+        pair = None
+        for p in self.detected_pairs:
+            if p.new_token.lower() == token_lower:
+                pair = p
+                break
+
+        if not pair:
+            await self._emit("error", {"message": f"Token not found in detected pairs"})
+            return
+
+        logger.info(f"🔄 Re-analyzing token {pair.token_info.symbol if pair.token_info else token_address}")
+
+        # Remove old entry to avoid duplicates (pipeline will re-add)
+        self.detected_pairs = [p for p in self.detected_pairs if p.new_token.lower() != token_lower]
+
+        # Re-run the full pipeline
+        await self._process_pair(pair.pair_address, pair.token0, pair.token1, pair.block_number)
+
     # ─── Price fetcher ──────────────────────────────────────
     async def _safe_get_block_number(self) -> int:
         """Get current block number with RPC rotation on failure."""
@@ -1516,6 +1543,8 @@ class SniperBot:
                 self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                 new_rpc = self._rpc_list[self._rpc_index]
                 self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                if self.chain_id in POA_CHAIN_IDS:
+                    self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
                 self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                 await asyncio.sleep(1.0 if is_429 else 0.3)
         # If all attempts fail, raise to let the main loop handle it
@@ -1569,6 +1598,8 @@ class SniperBot:
                 self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                 new_rpc = self._rpc_list[self._rpc_index]
                 self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                if self.chain_id in POA_CHAIN_IDS:
+                    self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
                 self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                 await asyncio.sleep(0.5)
 
@@ -2206,9 +2237,10 @@ class SniperBot:
                             token_info._dev_ok = True
                             # Record this launch for future reputation
                             await self.dev_tracker.record_launch(
-                                dev_result.creator_address, new_token,
-                                token_info.symbol, usd_liq,
-                                token_info.lp_locked,
+                                token_address=new_token,
+                                creator=dev_result.creator_address,
+                                token_info=token_info,
+                                liquidity_usd=usd_liq,
                             )
                     except Exception as e:
                         logger.warning(f"v3 dev tracker failed for {token_info.symbol}: {e}")
@@ -2241,7 +2273,7 @@ class SniperBot:
                             }
                         smart_for_risk = []
 
-                        risk_decision = await self.risk_engine.evaluate(
+                        risk_decision = self.risk_engine.evaluate(
                             token_info=token_info,
                             pump_result=pump_for_risk,
                             dev_result=dev_result,
@@ -3070,7 +3102,7 @@ class SniperBot:
         # ── v4: Record metrics for this detection ──
         try:
             _pipeline_ms = (time.time() - _pipeline_start) * 1000
-            self.resource_monitor.record_token_processed(_pipeline_ms)
+            self.resource_monitor.record_token_processed(token_info.symbol if token_info else "?", _pipeline_ms)
             detection = DetectionEvent(
                 token_address=new_token,
                 symbol=token_info.symbol if token_info else "?",
@@ -3603,6 +3635,8 @@ class SniperBot:
                             self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                             new_rpc = self._rpc_list[self._rpc_index]
                             self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                            if self.chain_id in POA_CHAIN_IDS:
+                                self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
                             self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                             await self._emit("scan_info", {
                                 "message": f"Switched RPC → {new_rpc}",
@@ -3709,6 +3743,8 @@ class SniperBot:
                     self._rpc_index = (self._rpc_index + 1) % len(self._rpc_list)
                     new_rpc = self._rpc_list[self._rpc_index]
                     self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+                    if self.chain_id in POA_CHAIN_IDS:
+                        self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
                     self.analyzer = ContractAnalyzer(self.w3, self.chain_id, self._http_session, api_manager=self.api_manager)
                     await self._emit("scan_info", {
                         "message": f"⏳ 429 on block fetch — switched to {new_rpc}, backoff {_backoff:.1f}s",

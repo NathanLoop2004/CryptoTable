@@ -132,6 +132,16 @@ class SniperConsumer(AsyncWebsocketConsumer):
             else:
                 await self._send_event("error", {"message": "Bot not running"})
 
+        elif action == "re_analyze_token":
+            if self.bot:
+                token = msg.get("token", "")
+                if token:
+                    await self.bot.re_analyze_token(token)
+                else:
+                    await self._send_event("error", {"message": "Missing token address"})
+            else:
+                await self._send_event("error", {"message": "Bot not running"})
+
         else:
             await self._send_event("error", {"message": f"Unknown action: {action}"})
 

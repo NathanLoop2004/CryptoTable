@@ -609,6 +609,7 @@ class TradeExecutor:
         for rpc_url in self.rpc_list[1:]:
             try:
                 fallback_w3 = Web3(Web3.HTTPProvider(rpc_url))
+                fallback_w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
                 tx_hash = await loop.run_in_executor(
                     None, fallback_w3.eth.send_raw_transaction, raw_tx
                 )

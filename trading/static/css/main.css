@@ -2194,6 +2194,32 @@ body.resizing-col *, body.resizing-row * {
     color: #02c076;
     box-shadow: 0 0 8px rgba(2, 192, 118, .25);
 }
+.btn-log-reanalyze {
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.12);
+    color: #8a8f98;
+    font-size: .8em;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all .2s;
+}
+.btn-log-reanalyze:hover {
+    background: rgba(54, 162, 235, .15);
+    border-color: #36a2eb;
+    color: #36a2eb;
+}
+.btn-log-reanalyze.loading {
+    background: rgba(255, 193, 7, .15);
+    border-color: #ffc107;
+    color: #ffc107;
+    cursor: wait;
+    animation: reanalyze-pulse 1.5s infinite;
+}
+@keyframes reanalyze-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+}
 
 /* ═══ Token Chart Modal ═══ */
 .modal-chart {

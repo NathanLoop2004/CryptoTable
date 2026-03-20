@@ -35,12 +35,14 @@ def daily_backtest_summary(self):
     """
     try:
         from web3 import Web3
+        from web3.middleware import ExtraDataToPOAMiddleware
         from trading.Services.backtestEngine import BacktestEngine, BacktestConfig
         import asyncio
         import os
 
         rpc = os.environ.get("SNIPER_RPC_BSC", "https://bsc-dataseed1.binance.org")
         w3 = Web3(Web3.HTTPProvider(rpc))
+        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
         config = BacktestConfig(
             chain_id=56,
@@ -181,12 +183,14 @@ def run_backtest(self, config_dict: dict):
     """
     try:
         from web3 import Web3
+        from web3.middleware import ExtraDataToPOAMiddleware
         from trading.Services.backtestEngine import BacktestEngine, BacktestConfig
         import asyncio
         import os
 
         rpc = os.environ.get("SNIPER_RPC_BSC", "https://bsc-dataseed1.binance.org")
         w3 = Web3(Web3.HTTPProvider(rpc))
+        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
         config = BacktestConfig(**{
             k: v for k, v in config_dict.items() if hasattr(BacktestConfig, k)

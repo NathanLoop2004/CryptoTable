@@ -1430,6 +1430,14 @@
             afBtn.classList.toggle("active", _logAutoFollow);
             afBtn.textContent = _logAutoFollow ? "⏩ Auto" : "⏸ Auto";
         }
+
+        // Reset re-analyze button when new data arrives
+        const raBtn = document.getElementById("btn-log-reanalyze");
+        if (raBtn && raBtn.disabled) {
+            raBtn.disabled = false;
+            raBtn.textContent = "🔄 Re-Analizar";
+            raBtn.classList.remove("loading");
+        }
     }
 
     // ─── ALL Detected tokens (liquid + no-liquid) ──────
@@ -2109,6 +2117,31 @@
                 // Jump to latest token immediately
                 _openLogForData(allDetected[allDetected.length - 1]);
             }
+        });
+    }
+
+    // Re-analyze button
+    const btnLogReanalyze = document.getElementById("btn-log-reanalyze");
+    if (btnLogReanalyze) {
+        btnLogReanalyze.addEventListener("click", () => {
+            if (!_logModalAddr) return;
+            // Disable button and show loading state
+            btnLogReanalyze.disabled = true;
+            btnLogReanalyze.textContent = "⏳ Analizando…";
+            btnLogReanalyze.classList.add("loading");
+            // Pause auto-follow so modal stays on this token
+            _logAutoFollow = false;
+            if (btnLogAutoFollow) {
+                btnLogAutoFollow.classList.remove("active");
+                btnLogAutoFollow.textContent = "⏸ Auto";
+            }
+            sendWS({ action: "re_analyze_token", token: _logModalAddr });
+            // Re-enable after timeout (analysis takes ~10-30s)
+            setTimeout(() => {
+                btnLogReanalyze.disabled = false;
+                btnLogReanalyze.textContent = "🔄 Re-Analizar";
+                btnLogReanalyze.classList.remove("loading");
+            }, 60000);
         });
     }
 

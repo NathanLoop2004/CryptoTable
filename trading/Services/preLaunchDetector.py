@@ -376,7 +376,9 @@ class PreLaunchDetector:
                                     logger.debug(f"Launch callback error: {e}")
 
             except Exception as e:
-                logger.debug(f"PreLaunch watchlist check error ({token.symbol}): {e}")
+                err_str = str(e)
+                if "execution reverted" not in err_str:
+                    logger.debug(f"PreLaunch watchlist check error ({token.symbol}): {e}")
 
     def _calculate_launch_probability(self, token: PreLaunchToken) -> int:
         """Calculate 0–100 probability of imminent launch."""

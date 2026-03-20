@@ -435,10 +435,10 @@ class OrderflowAnalyzer:
     """
 
     # Swap event topic (Uniswap V2 / PancakeSwap)
-    SWAP_TOPIC = Web3.keccak(text="Swap(address,uint256,uint256,uint256,uint256,address)").hex()
+    SWAP_TOPIC = Web3.keccak(text="Swap(address,uint256,uint256,uint256,uint256,address)")
 
     # Transfer event topic (ERC-20)
-    TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
+    TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)")
 
     def __init__(self, w3: Web3, chain_id: int = 56, config: OrderflowConfig = None):
         self.w3 = w3

@@ -28,9 +28,11 @@ logger = logging.getLogger(__name__)
 
 try:
     from web3 import Web3
+    from hexbytes import HexBytes
     HAS_WEB3 = True
 except ImportError:
     Web3 = None
+    HexBytes = None
     HAS_WEB3 = False
 
 
@@ -415,7 +417,7 @@ class PredictiveLaunchScanner:
 
         if HAS_WEB3 and Web3:
             try:
-                self.PAIR_CREATED_TOPIC = Web3.keccak(
+                self.PAIR_CREATED_TOPIC = "0x" + Web3.keccak(
                     text="PairCreated(address,address,address,uint256)"
                 ).hex()
             except Exception:
@@ -602,8 +604,8 @@ class PredictiveLaunchScanner:
             logs = self.w3.eth.get_logs({
                 "fromBlock": block_number,
                 "toBlock": block_number,
-                "address": self.config.factory_address,
-                "topics": [self.PAIR_CREATED_TOPIC],
+                "address": Web3.to_checksum_address(self.config.factory_address),
+                "topics": [HexBytes(self.PAIR_CREATED_TOPIC)],
             })
 
             for log in logs:

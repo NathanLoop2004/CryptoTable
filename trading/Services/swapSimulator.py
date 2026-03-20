@@ -79,10 +79,7 @@ ROUTER_SWAP_ABI = [
     {
         "inputs": [
             {"name": "amountIn", "type": "uint256"},
-            {"name": "amountIn", "type": "uint256"},
             {"name": "path", "type": "address[]"},
-            {"name": "to", "type": "address"},
-            {"name": "deadline", "type": "uint256"},
         ],
         "name": "getAmountsOut",
         "outputs": [{"name": "amounts", "type": "uint256[]"}],
